@@ -39,16 +39,11 @@ def extraer_datos_despacho(fecha):
     urls = generar_urls_coes(fecha)
     headers = {'User-Agent': 'Mozilla/5.0'}
     
-    # Diccionario de homologación para Punta Lomitas (Ambos formatos)
     mapa_lomitas = {
-        "PUNTA LOMITAS-I": "PUNTA LOMITAS",
-        "PUNTA LOMITAS-II": "PUNTA LOMITAS",
-        "P LOMITAS_EXP-BL1": "PUNTA LOMITAS EXPANSIÓN",
-        "P LOMITAS_EXP-BL2": "PUNTA LOMITAS EXPANSIÓN",
-        "PUNTA LOMITAS-BL1": "PUNTA LOMITAS",
-        "PUNTA LOMITAS-BL2": "PUNTA LOMITAS",
-        "PUN LOMITAS_EXP-BL1": "PUNTA LOMITAS EXPANSIÓN",
-        "PUN LOMITAS_EXP-BL2": "PUNTA LOMITAS EXPANSIÓN"
+        "PUNTA LOMITAS-I": "PUNTA LOMITAS", "PUNTA LOMITAS-II": "PUNTA LOMITAS",
+        "P LOMITAS_EXP-BL1": "PUNTA LOMITAS EXPANSIÓN", "P LOMITAS_EXP-BL2": "PUNTA LOMITAS EXPANSIÓN",
+        "PUNTA LOMITAS-BL1": "PUNTA LOMITAS", "PUNTA LOMITAS-BL2": "PUNTA LOMITAS",
+        "PUN LOMITAS_EXP-BL1": "PUNTA LOMITAS EXPANSIÓN", "PUN LOMITAS_EXP-BL2": "PUNTA LOMITAS EXPANSIÓN"
     }
     
     for url, tipo_anexo in urls:
@@ -60,6 +55,7 @@ def extraer_datos_despacho(fecha):
                 hojas_limpias = {h.strip().upper(): h for h in xls.sheet_names}
                 
                 if "DESPACHO_EJECUTADO" in hojas_limpias:
+                    # --- EXTRACCIÓN HOJA 1: DESPACHO_EJECUTADO ---
                     nombre_real = hojas_limpias["DESPACHO_EJECUTADO"]
                     df_raw = pd.read_excel(xls, sheet_name=nombre_real, header=None)
                     
@@ -76,24 +72,18 @@ def extraer_datos_despacho(fecha):
                         tipos_raw = ["N/A"] * len(plantas_raw)
                         empresas_raw = ["N/A"] * len(plantas_raw)
                     
-                    idx_validos = []
-                    nombres_plantas = []
-                    dict_metadatos = {}
+                    idx_validos, nombres_plantas, dict_metadatos = [], [], {}
                     
                     for i, p in enumerate(plantas_raw):
                         if pd.notna(p):
                             nombre_base_crudo = str(p).strip().upper()
                             if nombre_base_crudo != '' and 'MW' not in nombre_base_crudo:
-                                
-                                # 1. Aplicar Homologación Eólica
                                 nombre_base = mapa_lomitas.get(nombre_base_crudo, nombre_base_crudo)
                                 tipo_original = str(tipos_raw[i]).strip().upper() if pd.notna(tipos_raw[i]) else "N/A"
                                 
-                                # Forzar tipo EOLICA para Punta Lomitas si es Anexo1 (N/A) para mantener la abreviatura (EOL)
                                 if nombre_base in ["PUNTA LOMITAS", "PUNTA LOMITAS EXPANSIÓN"] and tipo_original == "N/A":
                                     tipo_original = "EOLICA"
                                 
-                                # 2. Asignar Abreviaturas
                                 if tipo_original != "N/A":
                                     if "TERMO" in tipo_original: abrev = "TER"
                                     elif "HIDRO" in tipo_original: abrev = "HID"
@@ -106,8 +96,6 @@ def extraer_datos_despacho(fecha):
                                 
                                 idx_validos.append(i)
                                 nombres_plantas.append(nombre_central)
-                                
-                                # Guardar metadata (Se sobrescribirá para bloques consolidados, lo cual es correcto)
                                 dict_metadatos[nombre_central] = {
                                     'ZONA': str(zonas_raw[i]).strip().upper() if pd.notna(zonas_raw[i]) else "N/A",
                                     'TIPO_CENTRAL': tipo_original,
@@ -115,48 +103,75 @@ def extraer_datos_despacho(fecha):
                                 }
                     
                     datos_limpios = data_raw[:, idx_validos]
-                    
                     df_dia = pd.DataFrame(datos_limpios, columns=nombres_plantas)
                     fechas_horas = [fecha + timedelta(minutes=30 * (i + 1)) for i in range(48)]
                     df_dia['FECHA_HORA'] = fechas_horas
                     
-                    # Melt permite duplicados en columnas (ej. dos bloques P. Lomitas)
                     df_melt = df_dia.melt(id_vars=['FECHA_HORA'], var_name='CENTRAL', value_name='DESPACHO_MW')
                     df_melt['DESPACHO_MW'] = pd.to_numeric(df_melt['DESPACHO_MW'], errors='coerce').fillna(0)
-                    
                     df_melt['ZONA'] = df_melt['CENTRAL'].map(lambda x: dict_metadatos[x]['ZONA'])
                     df_melt['TIPO_CENTRAL'] = df_melt['CENTRAL'].map(lambda x: dict_metadatos[x]['TIPO_CENTRAL'])
                     df_melt['EMPRESA'] = df_melt['CENTRAL'].map(lambda x: dict_metadatos[x]['EMPRESA'])
-                    
-                    # 3. Consolidación de sumas agrupadas (Une definitivamente los bloques de P. Lomitas)
                     df_melt = df_melt.groupby(['FECHA_HORA', 'CENTRAL', 'ZONA', 'TIPO_CENTRAL', 'EMPRESA'], as_index=False)['DESPACHO_MW'].sum()
-                    
-                    return df_melt, None
+
+                    # --- EXTRACCIÓN HOJA 2: TIPO_RECURSO (POR POSICIÓN DE COLUMNAS) ---
+                    df_recurso_melt = pd.DataFrame()
+                    if tipo_anexo == "AnexoA" and "TIPO_RECURSO" in hojas_limpias:
+                        hoja_rec = hojas_limpias["TIPO_RECURSO"]
+                        df_raw_rec = pd.read_excel(xls, sheet_name=hoja_rec, header=None)
+                        
+                        # Datos fila 7 a 54 (idx 6 a 53), col C a O (idx 2 a 14)
+                        data_rec = df_raw_rec.iloc[6:54, 2:15].values
+                        
+                        # Mapeo exacto por letras de columna: C, D, E, F, G, H, I, J, K, L, M, N, O
+                        categorias_fijas = [
+                            'Hidraulica',                       # C
+                            'Hidraulica',                       # D
+                            'Gas de Camisea',                   # E
+                            'Gasdel Norte+ Gas de la Selva',    # F
+                            'Gasdel Norte+ Gas de la Selva',    # G
+                            'Residual+ Diesel D2',              # H
+                            'Residual+ Diesel D2',              # I
+                            'biogas+Biomasa+Nafta+Flexigas',    # J
+                            'biogas+Biomasa+Nafta+Flexigas',    # K
+                            'biogas+Biomasa+Nafta+Flexigas',    # L
+                            'biogas+Biomasa+Nafta+Flexigas',    # M
+                            'Solar',                            # N
+                            'Eolica'                            # O
+                        ]
+                        
+                        df_rec = pd.DataFrame(data_rec, columns=categorias_fijas)
+                        df_rec['FECHA_HORA'] = fechas_horas
+                        df_rec_m = df_rec.melt(id_vars=['FECHA_HORA'], var_name='AGRUPACION', value_name='DESPACHO_MW')
+                        df_rec_m['DESPACHO_MW'] = pd.to_numeric(df_rec_m['DESPACHO_MW'], errors='coerce').fillna(0)
+                        
+                        # Agrupar las sumas por categoría fija
+                        df_recurso_melt = df_rec_m.groupby(['FECHA_HORA', 'AGRUPACION'], as_index=False)['DESPACHO_MW'].sum()
+
+                    return df_melt, df_recurso_melt, None
         except Exception:
             continue
             
-    return pd.DataFrame(), f"[{fecha.strftime('%d/%m/%Y')}] No se halló el archivo o la hoja 'DESPACHO_EJECUTADO'."
+    return pd.DataFrame(), pd.DataFrame(), f"[{fecha.strftime('%d/%m/%Y')}] No se halló data operacional válida."
 
 def procesar_rango_fechas(start_date, end_date, progress_bar, status_text):
     fechas = pd.date_range(start_date, end_date)
     total_dias = len(fechas)
-    lista_dfs = []
-    alertas = []
+    lista_dfs, lista_dfs_rec, alertas = [], [], []
     
     for i, f in enumerate(fechas):
         status_text.markdown(f"**⏳ Sincronizando datos de Despacho (COES):** {f.strftime('%d/%m/%Y')} *(Día {i+1} de {total_dias})*")
-        df_dia, error = extraer_datos_despacho(f)
+        df_dia, df_rec_dia, error = extraer_datos_despacho(f)
         
-        if not df_dia.empty:
-            lista_dfs.append(df_dia)
-        if error:
-            alertas.append(error)
+        if not df_dia.empty: lista_dfs.append(df_dia)
+        if not df_rec_dia.empty: lista_dfs_rec.append(df_rec_dia)
+        if error: alertas.append(error)
             
         progress_bar.progress((i + 1) / total_dias)
             
-    if lista_dfs:
-        return pd.concat(lista_dfs, ignore_index=True), alertas
-    return pd.DataFrame(), alertas
+    df_final = pd.concat(lista_dfs, ignore_index=True) if lista_dfs else pd.DataFrame()
+    df_rec_final = pd.concat(lista_dfs_rec, ignore_index=True) if lista_dfs_rec else pd.DataFrame()
+    return df_final, df_rec_final, alertas
 
 # --- 3. INTERFAZ DE USUARIO ---
 st.sidebar.header("Parámetros de Fiscalización")
@@ -168,9 +183,10 @@ if st.sidebar.button("Extraer Curvas de Despacho", type="primary"):
         status_text = st.empty()
         progress_bar = st.progress(0)
         
-        df_consolidado, alertas = procesar_rango_fechas(start_date, end_date, progress_bar, status_text)
+        df_consolidado, df_rec_consolidado, alertas = procesar_rango_fechas(start_date, end_date, progress_bar, status_text)
         
         st.session_state['df_despacho'] = df_consolidado
+        st.session_state['df_recurso'] = df_rec_consolidado
         st.session_state['alertas_despacho'] = alertas
             
         status_text.empty()
@@ -179,6 +195,7 @@ if st.sidebar.button("Extraer Curvas de Despacho", type="primary"):
 # --- 4. VISUALIZACIÓN DE DATOS ---
 if 'df_despacho' in st.session_state:
     df_datos = st.session_state['df_despacho']
+    df_recurso = st.session_state.get('df_recurso', pd.DataFrame())
     alertas = st.session_state['alertas_despacho']
     
     if df_datos.empty:
@@ -222,28 +239,23 @@ if 'df_despacho' in st.session_state:
             with col_f4:
                 lista_centrales = sorted(df_f3['CENTRAL'].unique())
                 filtro_cen = st.multiselect("⚡ Centrales:", options=lista_centrales, placeholder="Todas")
-            
             df_filtrado = df_f3[df_f3['CENTRAL'].isin(filtro_cen)] if filtro_cen else df_f3
 
         if df_filtrado.empty:
             st.warning("⚠️ No hay datos despachados para la selección de filtros.")
         else:
             # ==========================================
-            # MOTOR GRÁFICO (NATIVO X UNIFIED - OPTIMIZADO)
+            # MOTOR GRÁFICO
             # ==========================================
-            def crear_grafica_area(df_grafico, col_color, titulo):
+            def crear_grafica_area(df_grafico, col_color, titulo, color_map=None):
                 df_plot = df_grafico.copy()
-                
                 df_plot['DESPACHO_PLOT'] = df_plot['DESPACHO_MW'].replace(0, np.nan)
-                
                 df_sistema = df_plot.groupby('FECHA_HORA', as_index=False)['DESPACHO_MW'].sum()
-                idx_max = df_sistema['DESPACHO_MW'].idxmax()
-                pico_mw = df_sistema.loc[idx_max, 'DESPACHO_MW']
-                pico_hora = df_sistema.loc[idx_max, 'FECHA_HORA']
                 
                 fig = px.area(
                     df_plot, x="FECHA_HORA", y="DESPACHO_PLOT", color=col_color, title=titulo,
-                    labels={col_color: "Unidad Generadora" if col_color == "CENTRAL" else "Tecnología"}
+                    labels={col_color: "Unidad Generadora" if col_color == "CENTRAL" else "Tecnología"},
+                    color_discrete_map=color_map
                 )
                 
                 fig.update_traces(hovertemplate="%{y:,.2f} MW")
@@ -254,16 +266,8 @@ if 'df_despacho' in st.session_state:
                     mode='lines',
                     line=dict(width=0, color='rgba(0,0,0,0)'),
                     name='<b>⚡ TOTAL SISTEMA</b>',
-                    hovertemplate='<b>%{y:,.2f} MW</b>',
+                    hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>',
                     showlegend=False
-                )
-                
-                fig.add_annotation(
-                    x=pico_hora, y=pico_mw,
-                    text=f"<b>Pico Máximo: {pico_mw:,.2f} MW</b><br>{pico_hora.strftime('%d/%m %H:%M')}",
-                    showarrow=True, arrowhead=2, arrowsize=1.5, arrowwidth=2, arrowcolor="#e74c3c",
-                    ax=0, ay=-50, font=dict(size=12, color="#c0392b"),
-                    bgcolor="rgba(255,255,255,0.8)", bordercolor="#c0392b", borderwidth=1, borderpad=4
                 )
                 
                 fig.update_layout(
@@ -284,12 +288,10 @@ if 'df_despacho' in st.session_state:
             st.markdown("---")
             st.markdown("### 📊 Despacho Detallado por Unidades de Generación")
             
-            # FILTRO PARA LEYENDAS: Retener solo las centrales que despacharon > 0 MW en el total del rango filtrado
             energia_total_cen = df_filtrado.groupby('CENTRAL')['DESPACHO_MW'].sum()
             centrales_activas = energia_total_cen[energia_total_cen > 0].index
             
             df_plot_cen = df_filtrado[df_filtrado['CENTRAL'].isin(centrales_activas)].copy()
-            
             energia_ordenada_cen = energia_total_cen[centrales_activas].sort_values(ascending=False).index
             df_plot_cen['CENTRAL'] = pd.Categorical(df_plot_cen['CENTRAL'], categories=energia_ordenada_cen, ordered=True)
             df_plot_cen = df_plot_cen.sort_values(['FECHA_HORA', 'CENTRAL'])
@@ -298,23 +300,37 @@ if 'df_despacho' in st.session_state:
             st.plotly_chart(fig_cen, use_container_width=True)
 
             # ==========================================
-            # GRÁFICA 2: ÁREA APILADA POR TIPO DE GENERACIÓN 
+            # GRÁFICA 2: ÁREA APILADA POR TIPO DE GENERACIÓN (NUEVA FUENTE: TIPO_RECURSO)
             # ==========================================
-            if not es_formato_anexo1:
-                st.markdown("### 📊 Despacho por Tipo de Generación")
+            if not es_formato_anexo1 and not df_recurso.empty:
+                st.markdown("### 📊 Despacho por Tipo de Generación (Fuente: TIPO_RECURSO)")
                 
-                # FILTRO PARA LEYENDAS (TIPO)
-                energia_total_tipo = df_filtrado.groupby('TIPO_CENTRAL')['DESPACHO_MW'].sum()
-                tipos_activos = energia_total_tipo[energia_total_tipo > 0].index
+                orden_requerido = [
+                    "biogas+Biomasa+Nafta+Flexigas",
+                    "Solar",
+                    "Eolica",
+                    "Hidraulica",
+                    "Gasdel Norte+ Gas de la Selva",
+                    "Gas de Camisea",
+                    "Residual+ Diesel D2"
+                ]
                 
-                df_plot_tipo = df_filtrado[df_filtrado['TIPO_CENTRAL'].isin(tipos_activos)].copy()
+                # Paleta de colores ajustada: Hidráulica ahora es celeste
+                colores_tecnologia = {
+                    "biogas+Biomasa+Nafta+Flexigas": "purple",
+                    "Solar": "yellow",
+                    "Eolica": "gray",
+                    "Hidraulica": "skyblue",
+                    "Gasdel Norte+ Gas de la Selva": "lightgreen",
+                    "Gas de Camisea": "darkgreen",
+                    "Residual+ Diesel D2": "red"
+                }
                 
-                df_tipo = df_plot_tipo.groupby(['FECHA_HORA', 'TIPO_CENTRAL'], as_index=False)['DESPACHO_MW'].sum()
-                energia_ordenada_tipo = energia_total_tipo[tipos_activos].sort_values(ascending=False).index
-                df_tipo['TIPO_CENTRAL'] = pd.Categorical(df_tipo['TIPO_CENTRAL'], categories=energia_ordenada_tipo, ordered=True)
-                df_tipo = df_tipo.sort_values(['FECHA_HORA', 'TIPO_CENTRAL'])
+                df_tipo = df_recurso.copy()
+                df_tipo['AGRUPACION'] = pd.Categorical(df_tipo['AGRUPACION'], categories=orden_requerido, ordered=True)
+                df_tipo = df_tipo.sort_values(['FECHA_HORA', 'AGRUPACION'])
 
-                fig_tipo = crear_grafica_area(df_tipo, 'TIPO_CENTRAL', "Curva de Carga Apilada por Tecnología")
+                fig_tipo = crear_grafica_area(df_tipo, 'AGRUPACION', "Curva de Carga Apilada por Tecnología de Despacho", color_map=colores_tecnologia)
                 st.plotly_chart(fig_tipo, use_container_width=True)
             
             # ==========================================
@@ -323,7 +339,6 @@ if 'df_despacho' in st.session_state:
             st.markdown("---")
             st.markdown("### 🗄️ Trazabilidad de Potencia (Data Cruda - Vista Matricial)")
             
-            # Usamos df_plot_cen para que la tabla matricial también excluya a las unidades apagadas 
             df_pivot = df_plot_cen.copy()
             df_pivot['CENTRAL'] = df_pivot['CENTRAL'].astype(str)
             df_pivot['FECHA'] = df_pivot['FECHA_HORA'].dt.strftime('%d/%m/%Y')
@@ -342,7 +357,6 @@ if 'df_despacho' in st.session_state:
             )
             
             df_matricial = df_matricial.round(2)
-            
             st.dataframe(df_matricial, use_container_width=True)
             
             st.markdown("<br>", unsafe_allow_html=True)
