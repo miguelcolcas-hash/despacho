@@ -114,40 +114,74 @@ def extraer_datos_despacho(fecha):
                     df_melt['EMPRESA'] = df_melt['CENTRAL'].map(lambda x: dict_metadatos[x]['EMPRESA'])
                     df_melt = df_melt.groupby(['FECHA_HORA', 'CENTRAL', 'ZONA', 'TIPO_CENTRAL', 'EMPRESA'], as_index=False)['DESPACHO_MW'].sum()
 
-                    # --- EXTRACCIÓN HOJA 2: TIPO_RECURSO (POR POSICIÓN DE COLUMNAS) ---
+                    # --- EXTRACCIÓN HOJA 2: TIPO_RECURSO (LECTURA DINÁMICA Y NORMALIZADA) ---
                     df_recurso_melt = pd.DataFrame()
                     if tipo_anexo == "AnexoA" and "TIPO_RECURSO" in hojas_limpias:
                         hoja_rec = hojas_limpias["TIPO_RECURSO"]
                         df_raw_rec = pd.read_excel(xls, sheet_name=hoja_rec, header=None)
                         
-                        # Datos fila 7 a 54 (idx 6 a 53), col C a O (idx 2 a 14)
+                        # 1. Extraer las cabeceras reales desde la fila 6 (índice 5)
+                        cabeceras_crudas = df_raw_rec.iloc[5, 2:15].values
+                        
+                        # 2. Funciones de limpieza y clasificación robusta
+                        def normalizar_texto(texto):
+                            if pd.isna(texto): return ""
+                            # Convertir a mayúsculas y quitar espacios en los extremos
+                            t = str(texto).strip().upper()
+                            # Reemplazar tildes para estandarizar la evaluación
+                            t = t.replace('Á', 'A').replace('É', 'E').replace('Í', 'I').replace('Ó', 'O').replace('Ú', 'U')
+                            # Colapsar múltiples espacios internos (o saltos de línea) en un solo espacio
+                            t = " ".join(t.split())
+                            return t
+
+                        def clasificar_recurso(nombre):
+                            n = normalizar_texto(nombre)
+                            # Evaluamos sobre la cadena ya limpia y mapeamos la nomenclatura exacta del COES
+                            
+                            # 1. Hidráulica (Pasada y Regulación)
+                            if "H. PASADA" in n or "H. REGULACION" in n or "HID" in n: 
+                                return 'Hidraulica'
+                            
+                            # 2. Gas Natural (Camisea vs Norte/Selva)
+                            elif "CAMISEA" in n: 
+                                return 'Gas de Camisea'
+                            elif "MALACAS" in n or "AGUAYTIA" in n or "NORTE" in n or "SELVA" in n: 
+                                return 'Gasdel Norte+ Gas de la Selva'
+                            
+                            # 3. Líquidos (Residual y Diésel)
+                            elif "RESIDUAL" in n or "DIESEL" in n or "D2" in n: 
+                                return 'Residual+ Diesel D2'
+                            
+                            # 4. Biomasa y Otros Gases (Bagazo, Biogás, Nafta, Flexigas)
+                            elif "NAFTA" in n or "FLEXIGAS" in n or "BAGAZO" in n or "BIOGAS" in n or "BIOMASA" in n: 
+                                return 'biogas+Biomasa+Nafta+Flexigas'
+                            
+                            # 5. Renovables (Solar y Eólica)
+                            elif "SOLAR" in n or "FOTOVOLTAICA" in n: 
+                                return 'Solar'
+                            elif "EOL" in n: 
+                                return 'Eolica'
+                            
+                            # Fallback de seguridad
+                            else: 
+                                return 'Otros'
+                        
+                        # 3. Mapear las cabeceras leídas a las categorías estándar requeridas
+                        categorias_dinamicas = [clasificar_recurso(c) for c in cabeceras_crudas]
+                        
+                        # 4. Extraer los datos de potencia (Fila 7 a 54, índice 6 a 53)
                         data_rec = df_raw_rec.iloc[6:54, 2:15].values
                         
-                        # Mapeo exacto por letras de columna: C, D, E, F, G, H, I, J, K, L, M, N, O
-                        categorias_fijas = [
-                            'Hidraulica',                       # C
-                            'Hidraulica',                       # D
-                            'Gas de Camisea',                   # E
-                            'Gasdel Norte+ Gas de la Selva',    # F
-                            'Gasdel Norte+ Gas de la Selva',    # G
-                            'Residual+ Diesel D2',              # H
-                            'Residual+ Diesel D2',              # I
-                            'biogas+Biomasa+Nafta+Flexigas',    # J
-                            'biogas+Biomasa+Nafta+Flexigas',    # K
-                            'biogas+Biomasa+Nafta+Flexigas',    # L
-                            'biogas+Biomasa+Nafta+Flexigas',    # M
-                            'Solar',                            # N
-                            'Eolica'                            # O
-                        ]
-                        
-                        df_rec = pd.DataFrame(data_rec, columns=categorias_fijas)
+                        # 5. Construir DataFrame con nombres dinámicos
+                        df_rec = pd.DataFrame(data_rec, columns=categorias_dinamicas)
                         df_rec['FECHA_HORA'] = fechas_horas
+                        
+                        # Transformar (Melt) y limpiar datos
                         df_rec_m = df_rec.melt(id_vars=['FECHA_HORA'], var_name='AGRUPACION', value_name='DESPACHO_MW')
                         df_rec_m['DESPACHO_MW'] = pd.to_numeric(df_rec_m['DESPACHO_MW'], errors='coerce').fillna(0)
                         
-                        # Agrupar las sumas por categoría fija
+                        # 6. Agrupar las sumas por la categoría dinámica calculada
                         df_recurso_melt = df_rec_m.groupby(['FECHA_HORA', 'AGRUPACION'], as_index=False)['DESPACHO_MW'].sum()
-
                     return df_melt, df_recurso_melt, None
         except Exception:
             continue
