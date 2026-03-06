@@ -283,17 +283,35 @@ if 'df_despacho' in st.session_state:
             # ==========================================
             def crear_grafica_area(df_grafico, col_color, titulo, color_map=None):
                 df_plot = df_grafico.copy()
-                df_plot['DESPACHO_PLOT'] = df_plot['DESPACHO_MW'].replace(0, np.nan)
-                df_sistema = df_plot.groupby('FECHA_HORA', as_index=False)['DESPACHO_MW'].sum()
                 
+                # 🚨 PASO CRÍTICO: Eliminar datos ocultos o columnas "TOTAL" encubiertas.
+                # Al eliminar nulos en la categoría, evitamos que columnas residuales 
+                # dupliquen la sumatoria del cálculo del techo del eje Y.
+                df_plot = df_plot.dropna(subset=[col_color])
+                
+                df_plot['DESPACHO_MW'] = pd.to_numeric(df_plot['DESPACHO_MW'], errors='coerce').fillna(0)
+                
+                # 1. Cálculo del techo del sistema (Ahora 100% puro y real)
+                df_sistema = df_plot.groupby('FECHA_HORA', as_index=False)['DESPACHO_MW'].sum()
+                max_demanda_real = df_sistema['DESPACHO_MW'].max()
+                
+                # Limite exacto: Máxima Demanda real + 5% de holgura visual
+                limite_superior_y = max_demanda_real * 1.05 if pd.notna(max_demanda_real) and max_demanda_real > 0 else 10000
+
+                # 2. Creación de la gráfica base
                 fig = px.area(
-                    df_plot, x="FECHA_HORA", y="DESPACHO_PLOT", color=col_color, title=titulo,
+                    df_plot, 
+                    x="FECHA_HORA", 
+                    y="DESPACHO_MW", 
+                    color=col_color, 
+                    title=titulo,
                     labels={col_color: "Unidad Generadora" if col_color == "CENTRAL" else "Tecnología"},
                     color_discrete_map=color_map
                 )
                 
                 fig.update_traces(hovertemplate="%{y:,.2f} MW")
                 
+                # 3. Curva invisible para el Tooltip Maestro
                 fig.add_scatter(
                     x=df_sistema['FECHA_HORA'], 
                     y=df_sistema['DESPACHO_MW'],
@@ -304,6 +322,7 @@ if 'df_despacho' in st.session_state:
                     showlegend=False
                 )
                 
+                # 4. Ajuste Forzado de Layout
                 fig.update_layout(
                     hovermode="x unified",
                     xaxis=dict(
@@ -311,9 +330,16 @@ if 'df_despacho' in st.session_state:
                         title="Fecha Operativa",
                         hoverformat="<b>🗓️ %d/%m/%Y %H:%M</b>"
                     ),
-                    yaxis=dict(title="Potencia Activa (MW)"),
-                    height=650 if col_color == 'CENTRAL' else 500
+                    yaxis=dict(
+                        title="Potencia Activa (MW)",
+                        range=[0, limite_superior_y], # <-- Límite matemático estricto
+                        autorange=False,
+                        fixedrange=False
+                    ),
+                    height=650 if col_color == 'CENTRAL' else 500,
+                    margin=dict(t=50, b=50, l=50, r=20)
                 )
+                
                 return fig
 
             # ==========================================
