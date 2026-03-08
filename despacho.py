@@ -120,67 +120,33 @@ def extraer_datos_despacho(fecha):
                         hoja_rec = hojas_limpias["TIPO_RECURSO"]
                         df_raw_rec = pd.read_excel(xls, sheet_name=hoja_rec, header=None)
                         
-                        # 1. Extraer las cabeceras reales desde la fila 6 (índice 5)
                         cabeceras_crudas = df_raw_rec.iloc[5, 2:15].values
                         
-                        # 2. Funciones de limpieza y clasificación robusta
                         def normalizar_texto(texto):
                             if pd.isna(texto): return ""
-                            # Convertir a mayúsculas y quitar espacios en los extremos
                             t = str(texto).strip().upper()
-                            # Reemplazar tildes para estandarizar la evaluación
                             t = t.replace('Á', 'A').replace('É', 'E').replace('Í', 'I').replace('Ó', 'O').replace('Ú', 'U')
-                            # Colapsar múltiples espacios internos (o saltos de línea) en un solo espacio
                             t = " ".join(t.split())
                             return t
 
                         def clasificar_recurso(nombre):
                             n = normalizar_texto(nombre)
-                            # Evaluamos sobre la cadena ya limpia y mapeamos la nomenclatura exacta del COES
-                            
-                            # 1. Hidráulica (Pasada y Regulación)
-                            if "H. PASADA" in n or "H. REGULACION" in n or "HID" in n: 
-                                return 'Hidraulica'
-                            
-                            # 2. Gas Natural (Camisea vs Norte/Selva)
-                            elif "CAMISEA" in n: 
-                                return 'Gas de Camisea'
-                            elif "MALACAS" in n or "AGUAYTIA" in n or "NORTE" in n or "SELVA" in n: 
-                                return 'Gasdel Norte+ Gas de la Selva'
-                            
-                            # 3. Líquidos (Residual y Diésel)
-                            elif "RESIDUAL" in n or "DIESEL" in n or "D2" in n: 
-                                return 'Residual+ Diesel D2'
-                            
-                            # 4. Biomasa y Otros Gases (Bagazo, Biogás, Nafta, Flexigas)
-                            elif "NAFTA" in n or "FLEXIGAS" in n or "BAGAZO" in n or "BIOGAS" in n or "BIOMASA" in n: 
-                                return 'biogas+Biomasa+Nafta+Flexigas'
-                            
-                            # 5. Renovables (Solar y Eólica)
-                            elif "SOLAR" in n or "FOTOVOLTAICA" in n: 
-                                return 'Solar'
-                            elif "EOL" in n: 
-                                return 'Eolica'
-                            
-                            # Fallback de seguridad
-                            else: 
-                                return 'Otros'
+                            if "H. PASADA" in n or "H. REGULACION" in n or "HID" in n: return 'Hidraulica'
+                            elif "CAMISEA" in n: return 'Gas de Camisea'
+                            elif "MALACAS" in n or "AGUAYTIA" in n or "NORTE" in n or "SELVA" in n: return 'Gasdel Norte+ Gas de la Selva'
+                            elif "RESIDUAL" in n or "DIESEL" in n or "D2" in n: return 'Residual+ Diesel D2'
+                            elif "NAFTA" in n or "FLEXIGAS" in n or "BAGAZO" in n or "BIOGAS" in n or "BIOMASA" in n: return 'biogas+Biomasa+Nafta+Flexigas'
+                            elif "SOLAR" in n or "FOTOVOLTAICA" in n: return 'Solar'
+                            elif "EOL" in n: return 'Eolica'
+                            else: return 'Otros'
                         
-                        # 3. Mapear las cabeceras leídas a las categorías estándar requeridas
                         categorias_dinamicas = [clasificar_recurso(c) for c in cabeceras_crudas]
-                        
-                        # 4. Extraer los datos de potencia (Fila 7 a 54, índice 6 a 53)
                         data_rec = df_raw_rec.iloc[6:54, 2:15].values
-                        
-                        # 5. Construir DataFrame con nombres dinámicos
                         df_rec = pd.DataFrame(data_rec, columns=categorias_dinamicas)
                         df_rec['FECHA_HORA'] = fechas_horas
                         
-                        # Transformar (Melt) y limpiar datos
                         df_rec_m = df_rec.melt(id_vars=['FECHA_HORA'], var_name='AGRUPACION', value_name='DESPACHO_MW')
                         df_rec_m['DESPACHO_MW'] = pd.to_numeric(df_rec_m['DESPACHO_MW'], errors='coerce').fillna(0)
-                        
-                        # 6. Agrupar las sumas por la categoría dinámica calculada
                         df_recurso_melt = df_rec_m.groupby(['FECHA_HORA', 'AGRUPACION'], as_index=False)['DESPACHO_MW'].sum()
                     return df_melt, df_recurso_melt, None
         except Exception:
@@ -283,22 +249,13 @@ if 'df_despacho' in st.session_state:
             # ==========================================
             def crear_grafica_area(df_grafico, col_color, titulo, color_map=None):
                 df_plot = df_grafico.copy()
-                
-                # 🚨 PASO CRÍTICO: Eliminar datos ocultos o columnas "TOTAL" encubiertas.
-                # Al eliminar nulos en la categoría, evitamos que columnas residuales 
-                # dupliquen la sumatoria del cálculo del techo del eje Y.
                 df_plot = df_plot.dropna(subset=[col_color])
-                
                 df_plot['DESPACHO_MW'] = pd.to_numeric(df_plot['DESPACHO_MW'], errors='coerce').fillna(0)
                 
-                # 1. Cálculo del techo del sistema (Ahora 100% puro y real)
                 df_sistema = df_plot.groupby('FECHA_HORA', as_index=False)['DESPACHO_MW'].sum()
                 max_demanda_real = df_sistema['DESPACHO_MW'].max()
-                
-                # Limite exacto: Máxima Demanda real + 5% de holgura visual
                 limite_superior_y = max_demanda_real * 1.05 if pd.notna(max_demanda_real) and max_demanda_real > 0 else 10000
 
-                # 2. Creación de la gráfica base
                 fig = px.area(
                     df_plot, 
                     x="FECHA_HORA", 
@@ -311,7 +268,6 @@ if 'df_despacho' in st.session_state:
                 
                 fig.update_traces(hovertemplate="%{y:,.2f} MW")
                 
-                # 3. Curva invisible para el Tooltip Maestro
                 fig.add_scatter(
                     x=df_sistema['FECHA_HORA'], 
                     y=df_sistema['DESPACHO_MW'],
@@ -322,32 +278,22 @@ if 'df_despacho' in st.session_state:
                     showlegend=False
                 )
                 
-                # 4. Ajuste Forzado de Layout
                 fig.update_layout(
                     hovermode="x unified",
-                    xaxis=dict(
-                        tickformat="%d/%m\n%H:%M", 
-                        title="Fecha Operativa",
-                        hoverformat="<b>🗓️ %d/%m/%Y %H:%M</b>"
-                    ),
-                    yaxis=dict(
-                        title="Potencia Activa (MW)",
-                        range=[0, limite_superior_y], # <-- Límite matemático estricto
-                        autorange=False,
-                        fixedrange=False
-                    ),
+                    xaxis=dict(tickformat="%d/%m\n%H:%M", title="Fecha Operativa", hoverformat="<b>🗓️ %d/%m/%Y %H:%M</b>"),
+                    yaxis=dict(title="Potencia Activa (MW)", range=[0, limite_superior_y], autorange=False, fixedrange=False),
                     height=650 if col_color == 'CENTRAL' else 500,
                     margin=dict(t=50, b=50, l=50, r=20)
                 )
-                
                 return fig
 
             # ==========================================
-            # GRÁFICA 1: ÁREA APILADA POR CENTRALES 
+            # SECCIÓN 1: ANÁLISIS POR CENTRALES (POTENCIA Y ENERGÍA)
             # ==========================================
             st.markdown("---")
-            st.markdown("### 📊 Despacho Detallado por Unidades de Generación")
+            st.markdown("### 📊 Análisis Detallado por Unidades de Generación")
             
+            # 1A. Gráfica de Áreas (Potencia)
             energia_total_cen = df_filtrado.groupby('CENTRAL')['DESPACHO_MW'].sum()
             centrales_activas = energia_total_cen[energia_total_cen > 0].index
             
@@ -356,42 +302,125 @@ if 'df_despacho' in st.session_state:
             df_plot_cen['CENTRAL'] = pd.Categorical(df_plot_cen['CENTRAL'], categories=energia_ordenada_cen, ordered=True)
             df_plot_cen = df_plot_cen.sort_values(['FECHA_HORA', 'CENTRAL'])
 
-            fig_cen = crear_grafica_area(df_plot_cen, 'CENTRAL', "Despacho Ejecutado de Potencia por Unidad")
+            fig_cen = crear_grafica_area(df_plot_cen, 'CENTRAL', "1. Despacho Ejecutado de Potencia por Unidad (MW)")
             st.plotly_chart(fig_cen, use_container_width=True)
 
+            # 1B. Gráfica de Barras Apiladas (Energía Diaria)
+            df_plot_cen['FECHA_DIA'] = (df_plot_cen['FECHA_HORA'] - pd.Timedelta(minutes=1)).dt.date
+            df_plot_cen['ENERGIA_MWH'] = df_plot_cen['DESPACHO_MW'] * 0.5 
+            
+            df_energia_cen = df_plot_cen.groupby(['FECHA_DIA', 'CENTRAL'], as_index=False)['ENERGIA_MWH'].sum()
+            
+            # --- CÁLCULO DEL TOTAL DIARIO (NUEVO) ---
+            df_total_dia_cen = df_energia_cen.groupby('FECHA_DIA', as_index=False)['ENERGIA_MWH'].sum()
+            limite_y_cen = df_total_dia_cen['ENERGIA_MWH'].max() * 1.15 # 15% de holgura para el texto
+
+            fig_bar_cen = px.bar(
+                df_energia_cen,
+                x='FECHA_DIA',
+                y='ENERGIA_MWH',
+                color='CENTRAL',
+                title="2. Despacho de Energía Diaria por Unidad (MWh)",
+                labels={'FECHA_DIA': 'Día Operativo', 'ENERGIA_MWH': 'Energía (MWh)', 'CENTRAL': 'Unidad'},
+                category_orders={'CENTRAL': energia_ordenada_cen}
+            )
+            
+            # --- AGREGAR ETIQUETAS DEL TOTAL DIARIO ---
+            fig_bar_cen.add_scatter(
+                x=df_total_dia_cen['FECHA_DIA'],
+                y=df_total_dia_cen['ENERGIA_MWH'],
+                mode='text',
+                text=df_total_dia_cen['ENERGIA_MWH'].apply(lambda x: f"<b>{x:,.1f} MWh</b>"),
+                textposition='top center',
+                showlegend=False,
+                hoverinfo='skip' # Evita que compita con el tooltip de las barras
+            )
+
+            fig_bar_cen.update_layout(
+                barmode='stack', hovermode="x unified",
+                xaxis=dict(
+                    tickformat="%d/%m/%Y", 
+                    title="Día Operativo", 
+                    tickmode="linear",      
+                    dtick=86400000          
+                ),
+                yaxis=dict(title="Energía Activa (MWh)", range=[0, limite_y_cen]), # Aplicamos rango con holgura
+                margin=dict(t=50, b=50, l=50, r=20)
+            )
+            fig_bar_cen.update_traces(hovertemplate="%{y:,.2f} MWh")
+            st.plotly_chart(fig_bar_cen, use_container_width=True)
+
             # ==========================================
-            # GRÁFICA 2: ÁREA APILADA POR TIPO DE GENERACIÓN (NUEVA FUENTE: TIPO_RECURSO)
+            # SECCIÓN 2: ANÁLISIS POR TECNOLOGÍA (POTENCIA Y ENERGÍA)
             # ==========================================
             if not es_formato_anexo1 and not df_recurso.empty:
-                st.markdown("### 📊 Despacho por Tipo de Generación (Fuente: TIPO_RECURSO)")
+                st.markdown("---")
+                st.markdown("### 📊 Análisis por Tipo de Generación (Fuente: TIPO_RECURSO)")
                 
                 orden_requerido = [
-                    "biogas+Biomasa+Nafta+Flexigas",
-                    "Solar",
-                    "Eolica",
-                    "Hidraulica",
-                    "Gasdel Norte+ Gas de la Selva",
-                    "Gas de Camisea",
-                    "Residual+ Diesel D2"
+                    "biogas+Biomasa+Nafta+Flexigas", "Solar", "Eolica", "Hidraulica",
+                    "Gasdel Norte+ Gas de la Selva", "Gas de Camisea", "Residual+ Diesel D2"
                 ]
                 
-                # Paleta de colores ajustada: Hidráulica ahora es celeste
                 colores_tecnologia = {
-                    "biogas+Biomasa+Nafta+Flexigas": "purple",
-                    "Solar": "yellow",
-                    "Eolica": "gray",
-                    "Hidraulica": "skyblue",
-                    "Gasdel Norte+ Gas de la Selva": "lightgreen",
-                    "Gas de Camisea": "darkgreen",
-                    "Residual+ Diesel D2": "red"
+                    "biogas+Biomasa+Nafta+Flexigas": "purple", "Solar": "yellow", "Eolica": "gray",
+                    "Hidraulica": "skyblue", "Gasdel Norte+ Gas de la Selva": "lightgreen",
+                    "Gas de Camisea": "darkgreen", "Residual+ Diesel D2": "red"
                 }
                 
+                # 2A. Gráfica de Áreas (Potencia)
                 df_tipo = df_recurso.copy()
                 df_tipo['AGRUPACION'] = pd.Categorical(df_tipo['AGRUPACION'], categories=orden_requerido, ordered=True)
                 df_tipo = df_tipo.sort_values(['FECHA_HORA', 'AGRUPACION'])
 
-                fig_tipo = crear_grafica_area(df_tipo, 'AGRUPACION', "Curva de Carga Apilada por Tecnología de Despacho", color_map=colores_tecnologia)
+                fig_tipo = crear_grafica_area(df_tipo, 'AGRUPACION', "1. Curva de Carga Apilada por Tecnología de Despacho (MW)", color_map=colores_tecnologia)
                 st.plotly_chart(fig_tipo, use_container_width=True)
+
+                # 2B. Gráfica de Barras Apiladas (Energía Diaria)
+                df_tipo['FECHA_DIA'] = (df_tipo['FECHA_HORA'] - pd.Timedelta(minutes=1)).dt.date
+                df_tipo['ENERGIA_MWH'] = df_tipo['DESPACHO_MW'] * 0.5 
+                
+                df_energia_tipo = df_tipo.groupby(['FECHA_DIA', 'AGRUPACION'], as_index=False)['ENERGIA_MWH'].sum()
+                
+                # --- CÁLCULO DEL TOTAL DIARIO (NUEVO) ---
+                df_total_dia_tipo = df_energia_tipo.groupby('FECHA_DIA', as_index=False)['ENERGIA_MWH'].sum()
+                limite_y_tipo = df_total_dia_tipo['ENERGIA_MWH'].max() * 1.15
+
+                fig_bar_tipo = px.bar(
+                    df_energia_tipo,
+                    x='FECHA_DIA',
+                    y='ENERGIA_MWH',
+                    color='AGRUPACION',
+                    title="2. Despacho de Energía Diaria por Tecnología (MWh)",
+                    labels={'FECHA_DIA': 'Día Operativo', 'ENERGIA_MWH': 'Energía (MWh)', 'AGRUPACION': 'Tecnología'},
+                    color_discrete_map=colores_tecnologia,
+                    category_orders={'AGRUPACION': orden_requerido}
+                )
+                
+                # --- AGREGAR ETIQUETAS DEL TOTAL DIARIO ---
+                fig_bar_tipo.add_scatter(
+                    x=df_total_dia_tipo['FECHA_DIA'],
+                    y=df_total_dia_tipo['ENERGIA_MWH'],
+                    mode='text',
+                    text=df_total_dia_tipo['ENERGIA_MWH'].apply(lambda x: f"<b>{x:,.1f} MWh</b>"),
+                    textposition='top center',
+                    showlegend=False,
+                    hoverinfo='skip'
+                )
+
+                fig_bar_tipo.update_layout(
+                    barmode='stack', hovermode="x unified",
+                    xaxis=dict(
+                        tickformat="%d/%m/%Y", 
+                        title="Día Operativo",
+                        tickmode="linear", 
+                        dtick=86400000 
+                    ),
+                    yaxis=dict(title="Energía Activa (MWh)", range=[0, limite_y_tipo]), # Aplicamos rango con holgura
+                    margin=dict(t=50, b=50, l=50, r=20)
+                )
+                fig_bar_tipo.update_traces(hovertemplate="%{y:,.2f} MWh")
+                st.plotly_chart(fig_bar_tipo, use_container_width=True)
             
             # ==========================================
             # TRAZABILIDAD MATRICIAL (PIVOT)
