@@ -598,7 +598,7 @@ if 'df_despacho' in st.session_state:
                     
                     fig_prom_iny = px.bar(
                         df_promedio_iny, x='FECHA_DIA_OPERATIVO', y='DESPACHO_MW', color='CENTRAL',
-                        title="Potencia Promedio en Operación (Solo periodos con inyección de energía) (MW)",
+                        title="Potencia Promedio en Operación (MW)",
                         barmode='group',
                         labels={'FECHA_DIA_OPERATIVO': 'Día Operativo', 'DESPACHO_MW': 'Promedio en Operación (MW)'},
                         color_discrete_sequence=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'],
@@ -659,7 +659,7 @@ if 'df_despacho' in st.session_state:
                 # 6. CALIFICACIÓN DE LA OPERACIÓN (ENLAZADA AL FILTRO)
                 # ==========================================
                 st.markdown("---")
-                st.header("6. 🛡️ Calificación de la Operación (Filtrada por Centrales Seleccionadas)")
+                st.header("6. 🛡️ Calificación de la Operación")
                 
                 if df_seg_raw.empty:
                     st.info("No se registraron calificaciones de operación en la hoja CALIFICA_OPE_UG para el periodo consultado.")
@@ -735,23 +735,26 @@ if 'df_despacho' in st.session_state:
                 # ==========================================
                 with contenedor_reporte:
                     if st.button("📄 Preparar Reporte Word (Incluye Gráficos)", use_container_width=True):
-                        with st.spinner("Compilando gráficos y tablas en documento Word. Por favor, espera..."):
+                        with st.spinner("Compilando gráficos... (Nota: Este proceso requiere tener instalada la librería 'kaleido')"):
                             doc = Document()
                             doc.add_heading('Dashboard de Supervisión - Despacho SEIN', 0)
                             doc.add_paragraph(f"Reporte generado automáticamente el: {datetime.now().strftime('%d/%m/%Y a las %H:%M')}")
 
+                            # Variable para detectar si falla la captura de imágenes en el servidor/PC
+                            error_graficos = False
+
                             def agregar_grafico(doc, fig, titulo):
+                                nonlocal error_graficos
                                 if fig is not None:
                                     doc.add_heading(titulo, level=1)
                                     try:
-                                        img_bytes = fig.to_image(format="png", width=800, height=450, scale=2, engine="kaleido")
-                                        doc.add_picture(io.BytesIO(img_bytes), width=Inches(6.0))
+                                        # Se reduce la escala a 1.2 para evitar bloqueos de memoria (Timeout)
+                                        img_bytes = fig.to_image(format="png", width=800, height=450, scale=1.2)
+                                        imagen_stream = io.BytesIO(img_bytes)
+                                        doc.add_picture(imagen_stream, width=Inches(6.0))
                                     except Exception as e:
-                                        try:
-                                            img_bytes = fig.to_image(format="png", engine="kaleido")
-                                            doc.add_picture(io.BytesIO(img_bytes), width=Inches(6.0))
-                                        except Exception as e2:
-                                            doc.add_paragraph(f"[Error de renderizado local: {str(e2)}. Solución: Ejecuta 'pip install kaleido==0.1.0.post1' en tu terminal]")
+                                        error_graficos = True
+                                        doc.add_paragraph(f"⚠️ [Error al generar la imagen de este gráfico]")
 
                             def agregar_tabla(doc, df, titulo):
                                 if df is not None and not df.empty:
@@ -780,6 +783,12 @@ if 'df_despacho' in st.session_state:
                             buffer_docx = io.BytesIO()
                             doc.save(buffer_docx)
                             buffer_docx.seek(0)
+                            
+                            # Mostrar alerta en la interfaz si falló la exportación de gráficos
+                            if error_graficos:
+                                st.error("❌ Ocurrió un error al intentar capturar los gráficos. \n\n**Solución obligatoria:** Abre tu terminal de comandos (CMD, PowerShell o VSCode) y ejecuta la instalación del motor de captura:\n\n`pip install kaleido==0.1.0.post1`\n\n*(Nota: Es vital usar esta versión específica para evitar bloqueos en Windows. Reinicia tu app después de instalarlo).*")
+                            else:
+                                st.success("✅ ¡Reporte compilado con éxito incluyendo los gráficos de supervisión!")
 
                             st.download_button(
                                 label="⬇️ Haz clic aquí para descargar tu Reporte (.docx)",
