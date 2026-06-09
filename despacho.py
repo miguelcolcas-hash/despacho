@@ -740,11 +740,10 @@ if 'df_despacho' in st.session_state:
                             doc.add_heading('Dashboard de Supervisión - Despacho SEIN', 0)
                             doc.add_paragraph(f"Reporte generado automáticamente el: {datetime.now().strftime('%d/%m/%Y a las %H:%M')}")
 
-                            # Variable para detectar si falla la captura de imágenes en el servidor/PC
-                            error_graficos = False
+                            # SOLUCIÓN: Usamos un diccionario mutable para eludir los problemas de alcance (scope)
+                            estado_exportacion = {"error_graficos": False}
 
                             def agregar_grafico(doc, fig, titulo):
-                                nonlocal error_graficos
                                 if fig is not None:
                                     doc.add_heading(titulo, level=1)
                                     try:
@@ -753,7 +752,8 @@ if 'df_despacho' in st.session_state:
                                         imagen_stream = io.BytesIO(img_bytes)
                                         doc.add_picture(imagen_stream, width=Inches(6.0))
                                     except Exception as e:
-                                        error_graficos = True
+                                        # Modificamos el valor dentro del diccionario sin usar 'nonlocal'
+                                        estado_exportacion["error_graficos"] = True
                                         doc.add_paragraph(f"⚠️ [Error al generar la imagen de este gráfico]")
 
                             def agregar_tabla(doc, df, titulo):
@@ -784,9 +784,9 @@ if 'df_despacho' in st.session_state:
                             doc.save(buffer_docx)
                             buffer_docx.seek(0)
                             
-                            # Mostrar alerta en la interfaz si falló la exportación de gráficos
-                            if error_graficos:
-                                st.error("❌ Ocurrió un error al intentar capturar los gráficos. \n\n**Solución obligatoria:** Abre tu terminal de comandos (CMD, PowerShell o VSCode) y ejecuta la instalación del motor de captura:\n\n`pip install kaleido==0.1.0.post1`\n\n*(Nota: Es vital usar esta versión específica para evitar bloqueos en Windows. Reinicia tu app después de instalarlo).*")
+                            # Evaluamos el estado usando nuestro diccionario
+                            if estado_exportacion["error_graficos"]:
+                                st.error("❌ Ocurrió un error al intentar capturar los gráficos. \n\n**Solución obligatoria:** Abre tu terminal de comandos y ejecuta:\n\n`pip install kaleido==0.1.0.post1`\n\n*(Reinicia tu app después de instalarlo).*")
                             else:
                                 st.success("✅ ¡Reporte compilado con éxito incluyendo los gráficos de supervisión!")
 
