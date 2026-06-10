@@ -10,6 +10,26 @@ import plotly.express as px
 from docx import Document
 from docx.shared import Inches
 
+# Código CSS para ocultar elementos de la interfaz
+hide_github_style = """
+    <style>
+    /* Ocultar el botón de GitHub/Fork en la esquina superior derecha */
+    #GithubIcon {visibility: hidden;}
+    
+    /* Ocultar el menú de hamburguesa estándar de Streamlit */
+    #MainMenu {visibility: hidden;}
+    
+    /* Ocultar la barra de encabezado superior por completo */
+    header {visibility: hidden;}
+    
+    /* Ocultar el pie de página "Made with Streamlit" */
+    footer {visibility: hidden;}
+    </style>
+"""
+
+# Inyectar CSS en la aplicación
+st.markdown(hide_github_style, unsafe_allow_html=True)
+
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Supervisión Despacho - SEIN", layout="wide", initial_sidebar_state="expanded")
 st.title("⚡ Dashboard de Supervisión - Despacho Ejecutado del SEIN ")
@@ -605,7 +625,7 @@ if 'df_despacho' in st.session_state:
                             fig_inter_cn.update_traces(hovertemplate="%{y:,.2f} MW", line=dict(width=0))
                             fig_inter_cn.add_scatter(
                                 x=df_cn_total['FECHA_HORA'], y=df_cn_total['FLUJO_MW'], mode='lines',
-                                line=dict(width=3, color='black', dash='dash'), name='<b>⚡ NETO C-N</b>',
+                                line=dict(width=3, color='black', dash='dash'), name='<b>⚡ TOTAL C-N</b>',
                                 hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>'
                             )
                             
@@ -630,7 +650,7 @@ if 'df_despacho' in st.session_state:
                             fig_inter_cs.update_traces(hovertemplate="%{y:,.2f} MW", line=dict(width=0))
                             fig_inter_cs.add_scatter(
                                 x=df_cs_total['FECHA_HORA'], y=df_cs_total['FLUJO_MW'], mode='lines',
-                                line=dict(width=3, color='black', dash='dash'), name='<b>⚡ NETO C-S</b>',
+                                line=dict(width=3, color='black', dash='dash'), name='<b>⚡ TOTAL C-S</b>',
                                 hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>'
                             )
                             
