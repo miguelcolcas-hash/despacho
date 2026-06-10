@@ -209,21 +209,57 @@ def extraer_datos_despacho(fecha, dict_recursos):
                         pass
                         
                 # ==========================================
-                # EXTRACCIÓN HOJA: INTERCONEXIONES
+                # EXTRACCIÓN HOJA: ENLACES (ANTES INTERCONEXIONES)
                 # ==========================================
                 if "INTERCONEXIONES" in hojas_limpias:
                     try:
                         hoja_inter = hojas_limpias["INTERCONEXIONES"]
                         df_raw_inter = pd.read_excel(xls, sheet_name=hoja_inter, header=None)
-                        nombres_lineas = df_raw_inter.iloc[6, 2:7].values
-                        nombres_lineas = [str(x).strip() if pd.notna(x) else f"LÍNEA_{idx+1}" for idx, x in enumerate(nombres_lineas)]
-                        data_inter = df_raw_inter.iloc[7:55, 2:7].values
-                        df_inter_dia = pd.DataFrame(data_inter, columns=nombres_lineas)
-                        df_inter_dia['FECHA_HORA'] = [fecha + timedelta(minutes=30 * (i + 1)) for i in range(48)]
-                        df_inter_melt = df_inter_dia.melt(id_vars=['FECHA_HORA'], var_name='LINEA_TRANSMISION', value_name='FLUJO_MW')
+                        
+                        # Extraer Enlace Centro-Norte (Columnas C a G -> Índices 2 a 6)
+                        nom_cn = df_raw_inter.iloc[6, 2:7].values
+                        nom_cn = [str(x).strip() if pd.notna(x) else f"LÍNEA_CN_{idx+1}" for idx, x in enumerate(nom_cn)]
+                        data_cn = df_raw_inter.iloc[7:55, 2:7].values
+                        df_cn = pd.DataFrame(data_cn, columns=nom_cn)
+                        df_cn['ENLACE'] = 'CENTRO-NORTE'
+                        
+                        # Extraer Enlace Centro-Sur (Columnas I a L -> Índices 8 a 11)
+                        nom_cs = df_raw_inter.iloc[6, 8:12].values
+                        nom_cs = [str(x).strip() if pd.notna(x) else f"LÍNEA_CS_{idx+1}" for idx, x in enumerate(nom_cs)]
+                        data_cs = df_raw_inter.iloc[7:55, 8:12].values
+                        df_cs = pd.DataFrame(data_cs, columns=nom_cs)
+                        df_cs['ENLACE'] = 'CENTRO-SUR'
+                        
+                        # Generar horas y consolidar ambas tablas
+                        fechas_horas = [fecha + timedelta(minutes=30 * (i + 1)) for i in range(48)]
+                        df_cn['FECHA_HORA'] = fechas_horas
+                        df_cs['FECHA_HORA'] = fechas_horas
+                        
+                        df_melt_cn = df_cn.melt(id_vars=['FECHA_HORA', 'ENLACE'], var_name='LINEA_TRANSMISION', value_name='FLUJO_MW')
+                        df_melt_cs = df_cs.melt(id_vars=['FECHA_HORA', 'ENLACE'], var_name='LINEA_TRANSMISION', value_name='FLUJO_MW')
+                        
+                        df_inter_melt = pd.concat([df_melt_cn, df_melt_cs], ignore_index=True)
                         df_inter_melt['FLUJO_MW'] = pd.to_numeric(df_inter_melt['FLUJO_MW'], errors='coerce').fillna(0)
                     except Exception as e_inter:
                         pass
+                # ==========================================
+                # EXTRACCIÓN HOJA: DEMANDA_AREAS
+                # ==========================================
+                if "DEMANDA_AREAS" in hojas_limpias:
+                    try:
+                        hoja_dem = hojas_limpias["DEMANDA_AREAS"]
+                        df_raw_dem = pd.read_excel(xls, sheet_name=hoja_dem, header=None)
+                        
+                        # Extraemos SEIN, NORTE, CENTRO y SUR (Omitiendo explícitamente a SOBREANDES)
+                        data_dem = df_raw_dem.iloc[7:55, 3:7].values
+                        df_dem_area = pd.DataFrame(data_dem, columns=["SEIN", "NORTE", "CENTRO", "SUR"])
+                        df_dem_area['FECHA_HORA'] = [fecha + timedelta(minutes=30 * (i + 1)) for i in range(48)]
+                        
+                        df_demanda_dia = df_dem_area.melt(id_vars=['FECHA_HORA'], var_name='ÁREA', value_name='DEMANDA_MW')
+                        df_demanda_dia['DEMANDA_MW'] = pd.to_numeric(df_demanda_dia['DEMANDA_MW'], errors='coerce').fillna(0)
+                    except Exception as e_dem:
+                        pass
+
 
                 # ==========================================
                 # EXTRACCIÓN HOJA: CALIFICA_OPE_UG (CALIFICACIÓN DE OPERACIONES)
@@ -417,7 +453,8 @@ if 'df_despacho' in st.session_state:
                     df_sistema = df_plot.groupby('FECHA_HORA', as_index=False)['DESPACHO_MW'].sum()
                     max_demanda_real = df_sistema['DESPACHO_MW'].max()
                     
-                    limite_superior_y = max_demanda_real * 1.05 if pd.notna(max_demanda_real) and max_demanda_real > 0 else 1000
+                    # Ampliamos el margen a 1.12 para que no se corte el texto del marcador Máximo
+                    limite_superior_y = max_demanda_real * 1.12 if pd.notna(max_demanda_real) and max_demanda_real > 0 else 1000
                     fecha_min, fecha_max = df_plot['FECHA_HORA'].min(), df_plot['FECHA_HORA'].max()
 
                     fig = px.area(
@@ -429,11 +466,36 @@ if 'df_despacho' in st.session_state:
                     )
                     
                     fig.update_traces(hovertemplate="%{y:,.2f} MW", line=dict(width=0))
+                    
+                    # Línea de Total Generación (Transparente para el hover)
                     fig.add_scatter(
                         x=df_sistema['FECHA_HORA'], y=df_sistema['DESPACHO_MW'], mode='lines',
                         line=dict(width=0, color='rgba(0,0,0,0)'), name='<b>⚡ TOTAL GENERACIÓN</b>',
                         hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>', showlegend=False
                     )
+                    
+                    # --- MARCADORES DE MÁXIMO Y MÍNIMO PARA LA CURVA TOTAL ---
+                    if not df_sistema.empty:
+                        idx_max = df_sistema['DESPACHO_MW'].idxmax()
+                        idx_min = df_sistema['DESPACHO_MW'].idxmin()
+                        
+                        max_row = df_sistema.loc[idx_max]
+                        min_row = df_sistema.loc[idx_min]
+                        
+                        # Marcador Máximo
+                        fig.add_scatter(
+                            x=[max_row['FECHA_HORA']], y=[max_row['DESPACHO_MW']],
+                            mode='markers+text', marker=dict(color='black', size=10, symbol='triangle-up'),
+                            text=[f"Máx: {max_row['DESPACHO_MW']:,.0f}"], textposition="top center",
+                            name='Máx Total', hoverinfo='skip', showlegend=False
+                        )
+                        # Marcador Mínimo
+                        fig.add_scatter(
+                            x=[min_row['FECHA_HORA']], y=[min_row['DESPACHO_MW']],
+                            mode='markers+text', marker=dict(color='black', size=10, symbol='triangle-down'),
+                            text=[f"Mín: {min_row['DESPACHO_MW']:,.0f}"], textposition="bottom center",
+                            name='Mín Total', hoverinfo='skip', showlegend=False
+                        )
                     
                     fig.update_layout(
                         hovermode="x unified",
@@ -481,51 +543,111 @@ if 'df_despacho' in st.session_state:
                     st.info("La vista por Tipo de Generación requiere el formato AnexoA (con metadatos), el archivo actual no lo contiene.")
 
                 # ==========================================
-                # 2. FLUJO DE INTERCONEXIÓN
+                # 2. FLUJO DE ENLACES (CENTRO-NORTE Y CENTRO-SUR)
                 # ==========================================
                 st.markdown("---")
-                st.header("2. 🔌 Flujo de Interconexión")
+                st.header("2. 🔌 Flujo de Enlaces")
                 
                 if df_inter_raw.empty:
-                    st.info("No se encontraron datos de interconexión en el periodo descargado.")
+                    st.info("No se encontraron datos de enlaces en el periodo descargado.")
                 else:
                     df_inter_plot = df_inter_raw.sort_values(['FECHA_HORA', 'LINEA_TRANSMISION']).copy()
-                                       
-                    fig_inter = px.area(
-                        df_inter_plot, 
-                        x="FECHA_HORA", 
-                        y="FLUJO_MW", 
-                        color="LINEA_TRANSMISION",
-                        title="Flujos Activos Apilados por Línea de Transmisión (MW)",
-                        labels={"LINEA_TRANSMISION": "Línea de Transmisión", "FLUJO_MW": "Flujo de Potencia (MW)"},
-                        color_discrete_sequence=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f'],
-                        template="plotly_white"
-                    )
                     
-                    df_inter_total = df_inter_plot.groupby('FECHA_HORA', as_index=False)['FLUJO_MW'].sum()
+                    # Función auxiliar para marcar picos y valles en los flujos netos
+                    def marcar_min_max_flujo(fig, df_total, color_marcador):
+                        if not df_total.empty:
+                            idx_max = df_total['FLUJO_MW'].idxmax()
+                            idx_min = df_total['FLUJO_MW'].idxmin()
+                            max_row = df_total.loc[idx_max]
+                            min_row = df_total.loc[idx_min]
+                            
+                            # Marcador Máximo
+                            fig.add_scatter(
+                                x=[max_row['FECHA_HORA']], y=[max_row['FLUJO_MW']],
+                                mode='markers+text', marker=dict(color=color_marcador, size=10, symbol='triangle-up'),
+                                text=[f"Máx: {max_row['FLUJO_MW']:,.0f}"], textposition="top center",
+                                name='Máx Flujo', hoverinfo='skip', showlegend=False
+                            )
+                            # Marcador Mínimo
+                            fig.add_scatter(
+                                x=[min_row['FECHA_HORA']], y=[min_row['FLUJO_MW']],
+                                mode='markers+text', marker=dict(color=color_marcador, size=10, symbol='triangle-down'),
+                                text=[f"Mín: {min_row['FLUJO_MW']:,.0f}"], textposition="bottom center",
+                                name='Mín Flujo', hoverinfo='skip', showlegend=False
+                            )
+                            
+                            # Reajuste del eje Y para evitar que se corten los textos superiores/inferiores
+                            max_val = df_total['FLUJO_MW'].max()
+                            min_val = df_total['FLUJO_MW'].min()
+                            
+                            rango_max = max_val * 1.15 if max_val > 0 else max_val * 0.85
+                            rango_min = min_val * 1.15 if min_val < 0 else 0
+                            
+                            # Se asegura un margen visual en ambos sentidos del flujo
+                            if max_val != 0 or min_val != 0:
+                                fig.update_layout(yaxis=dict(range=[rango_min, rango_max]))
                     
-                    fig_inter.update_traces(hovertemplate="%{y:,.2f} MW", line=dict(width=0))
-                    fig_inter.add_scatter(
-                        x=df_inter_total['FECHA_HORA'], y=df_inter_total['FLUJO_MW'], mode='lines',
-                        line=dict(width=3, color='black', dash='dash'), name='<b>⚡ FLUJO TOTAL</b>',
-                        hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>'
-                    )
+                    # CREACIÓN DE 2 COLUMNAS PARA GRAFICAR LADO A LADO
+                    col_cn, col_cs = st.columns(2)
+                    
+                    # GRAFICAR CENTRO-NORTE (LADO IZQUIERDO)
+                    with col_cn:
+                        df_cn = df_inter_plot[df_inter_plot['ENLACE'] == 'CENTRO-NORTE'].copy()
+                        if not df_cn.empty:
+                            fig_inter_cn = px.area(
+                                df_cn, x="FECHA_HORA", y="FLUJO_MW", color="LINEA_TRANSMISION",
+                                title="Flujo Activo - Enlace Centro-Norte (MW)",
+                                labels={"LINEA_TRANSMISION": "Línea", "FLUJO_MW": "Potencia (MW)"},
+                                color_discrete_sequence=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'],
+                                template="plotly_white"
+                            )
+                            df_cn_total = df_cn.groupby('FECHA_HORA', as_index=False)['FLUJO_MW'].sum()
+                            fig_inter_cn.update_traces(hovertemplate="%{y:,.2f} MW", line=dict(width=0))
+                            fig_inter_cn.add_scatter(
+                                x=df_cn_total['FECHA_HORA'], y=df_cn_total['FLUJO_MW'], mode='lines',
+                                line=dict(width=3, color='black', dash='dash'), name='<b>⚡ NETO C-N</b>',
+                                hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>'
+                            )
+                            
+                            # Invocación de la función para marcar los límites operativos
+                            marcar_min_max_flujo(fig_inter_cn, df_cn_total, 'black')
+                            
+                            fig_inter_cn.update_layout(hovermode="x unified", xaxis_title="Fecha Operativa", height=450)
+                            st.plotly_chart(fig_inter_cn, use_container_width=True)
 
-                    fig_inter.update_layout(
-                        hovermode="x unified", xaxis=dict(tickformat="%d/%m\n%H:%M", title="Fecha Operativa"),
-                        height=550, margin=dict(t=50, b=50, l=50, r=20) 
-                    )
-                    st.plotly_chart(fig_inter, use_container_width=True)
+                    # GRAFICAR CENTRO-SUR (LADO DERECHO)
+                    with col_cs:
+                        df_cs = df_inter_plot[df_inter_plot['ENLACE'] == 'CENTRO-SUR'].copy()
+                        if not df_cs.empty:
+                            fig_inter_cs = px.area(
+                                df_cs, x="FECHA_HORA", y="FLUJO_MW", color="LINEA_TRANSMISION",
+                                title="Flujo Activo - Enlace Centro-Sur (MW)",
+                                labels={"LINEA_TRANSMISION": "Línea", "FLUJO_MW": "Potencia (MW)"},
+                                color_discrete_sequence=['#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'],
+                                template="plotly_white"
+                            )
+                            df_cs_total = df_cs.groupby('FECHA_HORA', as_index=False)['FLUJO_MW'].sum()
+                            fig_inter_cs.update_traces(hovertemplate="%{y:,.2f} MW", line=dict(width=0))
+                            fig_inter_cs.add_scatter(
+                                x=df_cs_total['FECHA_HORA'], y=df_cs_total['FLUJO_MW'], mode='lines',
+                                line=dict(width=3, color='black', dash='dash'), name='<b>⚡ NETO C-S</b>',
+                                hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>'
+                            )
+                            
+                            # Invocación de la función para marcar los límites operativos
+                            marcar_min_max_flujo(fig_inter_cs, df_cs_total, 'black')
+                            
+                            fig_inter_cs.update_layout(hovermode="x unified", xaxis_title="Fecha Operativa", height=450)
+                            st.plotly_chart(fig_inter_cs, use_container_width=True)
                     
-                    with st.expander("Ver Datos de Flujos (Vista Matricial)"):
+                    with st.expander("Ver Datos de Enlaces (Vista Matricial)"):
                         df_inter_pivot = df_inter_plot.copy()
                         df_inter_pivot['FECHA'] = df_inter_pivot['FECHA_HORA'].dt.strftime('%d/%m/%Y')
                         df_inter_pivot['HORA'] = df_inter_pivot['FECHA_HORA'].dt.strftime('%H:%M')
                         
                         df_mat_inter = df_inter_pivot.pivot_table(
-                            index=['FECHA', 'HORA'], columns=['LINEA_TRANSMISION'], values='FLUJO_MW', aggfunc='sum'
+                            index=['FECHA', 'HORA'], columns=['ENLACE', 'LINEA_TRANSMISION'], values='FLUJO_MW', aggfunc='sum'
                         ).round(2).fillna(0)
-                        df_mat_inter['TOTAL_FLUJO'] = df_mat_inter.sum(axis=1)
                         st.dataframe(df_mat_inter, use_container_width=True)
 
                 # ==========================================
@@ -798,12 +920,91 @@ if 'df_despacho' in st.session_state:
                                 type="primary",
                                 use_container_width=True
                             )
-
                 # ==========================================
-                # 7. TRAZABILIDAD (DATA CRUDA)
+                # 7. EVOLUCIÓN Y COMPORTAMIENTO DE LA DEMANDA
                 # ==========================================
                 st.markdown("---")
-                st.header("7. 🗄️ Trazabilidad de Potencia (Data Cruda - SEIN)")
+                st.header("7. 🌍 Evolución y Comportamiento de la Demanda por Áreas")
+                
+                if df_dem_raw is None or df_dem_raw.empty:
+                    st.info("No se encontraron datos de demanda en el periodo descargado.")
+                else:
+                    df_subareas = df_dem_raw[df_dem_raw['ÁREA'] != 'SEIN'].copy()
+                    df_sein = df_dem_raw[df_dem_raw['ÁREA'] == 'SEIN'].copy()
+                    
+                    colores_area = {"NORTE": "#FF9900", "CENTRO": "#3366CC", "SUR": "#DC3912"}
+                    
+                    # Cambio a px.line para generar series de líneas punteadas en lugar de áreas
+                    fig_demanda = px.line(
+                        df_subareas, x="FECHA_HORA", y="DEMANDA_MW", color="ÁREA",
+                        title="Evolución de la Demanda por Áreas Operativas (MW)",
+                        color_discrete_map=colores_area,
+                        template="plotly_white"
+                    )
+                    
+                    # Configurar las líneas como punteadas (dot)
+                    fig_demanda.update_traces(hovertemplate="%{y:,.2f} MW", line=dict(width=2, dash='dot'))
+                    
+                    # Función para hallar y graficar los puntos Máximos y Mínimos dinámicamente
+                    def graficar_min_max(fig, df_filtro, color_marcador, nombre_area):
+                        if not df_filtro.empty:
+                            idx_max = df_filtro['DEMANDA_MW'].idxmax()
+                            idx_min = df_filtro['DEMANDA_MW'].idxmin()
+                            
+                            max_row = df_filtro.loc[idx_max]
+                            min_row = df_filtro.loc[idx_min]
+                            
+                            # Marcador Máximo (Triángulo apuntando arriba)
+                            fig.add_scatter(
+                                x=[max_row['FECHA_HORA']], y=[max_row['DEMANDA_MW']],
+                                mode='markers+text',
+                                marker=dict(color=color_marcador, size=10, symbol='triangle-up'),
+                                text=[f"Máx: {max_row['DEMANDA_MW']:,.0f}"],
+                                textposition="top center",
+                                name=f'Máx {nombre_area}',
+                                hoverinfo='skip',
+                                showlegend=False
+                            )
+                            
+                            # Marcador Mínimo (Triángulo apuntando abajo)
+                            fig.add_scatter(
+                                x=[min_row['FECHA_HORA']], y=[min_row['DEMANDA_MW']],
+                                mode='markers+text',
+                                marker=dict(color=color_marcador, size=10, symbol='triangle-down'),
+                                text=[f"Mín: {min_row['DEMANDA_MW']:,.0f}"],
+                                textposition="bottom center",
+                                name=f'Mín {nombre_area}',
+                                hoverinfo='skip',
+                                showlegend=False
+                            )
+
+                    # Iterar para marcar puntos críticos por cada área operativa
+                    for area in df_subareas['ÁREA'].unique():
+                        graficar_min_max(fig_demanda, df_subareas[df_subareas['ÁREA'] == area], colores_area.get(area, 'black'), area)
+                    
+                    if not df_sein.empty:
+                        # La línea total del SEIN se mantiene sólida/gruesa o en formato 'dash' para contrastar con los 'dots'
+                        fig_demanda.add_scatter(
+                            x=df_sein['FECHA_HORA'], y=df_sein['DEMANDA_MW'], mode='lines',
+                            line=dict(width=3, color='black', dash='dash'), name='<b>⚡ DEMANDA SEIN TOTAL</b>',
+                            hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>'
+                        )
+                        # Marcar máximo y mínimo absoluto del SEIN
+                        graficar_min_max(fig_demanda, df_sein, 'black', 'SEIN')
+                    
+                    fig_demanda.update_layout(
+                        hovermode="x unified",
+                        xaxis=dict(tickformat="%d/%m\n%H:%M", title="Fecha Operativa"),
+                        yaxis=dict(title="Demanda Activa (MW)"),
+                        height=550, margin=dict(t=50, b=50, l=50, r=20)
+                    )
+                    st.plotly_chart(fig_demanda, use_container_width=True)
+
+                # ==========================================
+                # 8. TRAZABILIDAD (DATA CRUDA)
+                # ==========================================
+                st.markdown("---")
+                st.header("8. 🗄️ Trazabilidad de Potencia (Data Cruda - SEIN)")
                 
                 with st.expander("Ver Matriz de Despacho de Generación", expanded=False):
                     df_pivot = df_plot_cen.copy()
