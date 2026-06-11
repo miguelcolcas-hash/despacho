@@ -762,7 +762,7 @@ if 'df_despacho' in st.session_state:
                         fig_cmg.add_trace(go.Scatter(
                             x=[max_l['FECHA_HORA']], y=[max_l['FLUJO_NEG']],
                             mode='markers+text', marker=dict(color='#e377c2', size=12, symbol='triangle-up'),
-                            text=[f"<b>Máx L-5006: {max_l['FLUJO_NEG']:,.0f}<b>"], textposition="top center",
+                            text=[f"<b>Máx L-5006: {max_l['FLUJO_NEG']:,.0f} MW<b>"], textposition="top center",
                             showlegend=False, hoverinfo='skip'
                         ), secondary_y=False)
                         
