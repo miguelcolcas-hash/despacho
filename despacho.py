@@ -7,6 +7,7 @@ import requests
 import io
 import re
 import plotly.express as px
+import zipfile
 from docx import Document
 from docx.shared import Inches
 
@@ -347,28 +348,106 @@ def procesar_rango_fechas(start_date, end_date, progress_bar, status_text, dict_
     df_demanda_final = pd.concat(lista_demanda, ignore_index=True) if lista_demanda else pd.DataFrame()
     
     return df_final, df_inter_final, df_seguridad_final, df_demanda_final, alertas
+# ==========================================
+# NUEVA FUNCIÓN ETL: COSTOS MARGINALES (ZIP)
+# ==========================================
+@st.cache_data(show_spinner=False)
+def extraer_cmg(fecha):
+    año = fecha.strftime("%Y")
+    mes_num = fecha.strftime("%m")
+    dia = fecha.strftime("%d")
+    mes_titulo = MESES[fecha.month]
+    fecha_str = f"{año}{mes_num}{dia}"
+    
+    path_zip = f"Post Operación/Reportes/IEOD/{año}/{mes_num}_{mes_titulo}/{dia}/CMg{fecha_str}.zip"
+    url_cmg = f"https://www.coes.org.pe/portal/browser/download?url={urllib.parse.quote(path_zip)}"
+    
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    df_cmg_dia = pd.DataFrame()
+    
+    try:
+        res = requests.get(url_cmg, headers=headers, timeout=20)
+        if res.status_code == 200:
+            with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+                archivos_excel = [f for f in z.namelist() if f.endswith(('.xlsx', '.xls'))]
+                if archivos_excel:
+                    with z.open(archivos_excel[0]) as f:
+                        xls = pd.ExcelFile(f, engine='openpyxl')
+                        if 'Cmg_Barra' in xls.sheet_names:
+                            df_raw = pd.read_excel(xls, sheet_name='Cmg_Barra', header=None)
+                            
+                            barras = df_raw.iloc[2, :].values
+                            data = df_raw.iloc[3:51, :].values
+                            
+                            df_temp = pd.DataFrame(data, columns=barras)
+                            fechas_horas = [fecha + timedelta(minutes=30 * (i + 1)) for i in range(48)]
+                            df_temp['FECHA_HORA'] = fechas_horas
+                            
+                            barras_objetivo = ["SANTA ROSA 220", "MONTALVO 220", "PIURA OESTE 220"]
+                            cols_presentes = [c for c in barras_objetivo if c in df_temp.columns]
+                            
+                            if cols_presentes:
+                                df_cmg_dia = df_temp[['FECHA_HORA'] + cols_presentes].copy()
+                                df_cmg_dia = df_cmg_dia.melt(id_vars=['FECHA_HORA'], var_name='BARRA', value_name='CMG_USD')
+                                df_cmg_dia['CMG_USD'] = pd.to_numeric(df_cmg_dia['CMG_USD'], errors='coerce').fillna(0)
+    except Exception as e:
+        pass
+        
+    return df_cmg_dia
+
+def procesar_rango_fechas(start_date, end_date, progress_bar, status_text, dict_recursos):
+    fechas = pd.date_range(start_date, end_date)
+    total_dias = len(fechas)
+    lista_dfs, lista_inter, lista_seguridad, lista_demanda, lista_cmg, alertas = [], [], [], [], [], []
+    
+    for i, f in enumerate(fechas):
+        status_text.markdown(f"**⏳ Sincronizando datos de Despacho (COES):** {f.strftime('%d/%m/%Y')} *(Día {i+1} de {total_dias})*")
+        df_dia, df_inter_dia, df_seguridad_dia, df_demanda_dia, error = extraer_datos_despacho(f, dict_recursos)
+        df_cmg_dia = extraer_cmg(f)
+        
+        if not df_dia.empty: lista_dfs.append(df_dia)
+        if not df_inter_dia.empty: lista_inter.append(df_inter_dia)
+        if not df_seguridad_dia.empty: lista_seguridad.append(df_seguridad_dia)
+        if not df_demanda_dia.empty: lista_demanda.append(df_demanda_dia)
+        if not df_cmg_dia.empty: lista_cmg.append(df_cmg_dia)
+        if error: alertas.append(error)
+            
+        progress_bar.progress((i + 1) / total_dias)
+            
+    df_final = pd.concat(lista_dfs, ignore_index=True) if lista_dfs else pd.DataFrame()
+    df_inter_final = pd.concat(lista_inter, ignore_index=True) if lista_inter else pd.DataFrame()
+    df_seguridad_final = pd.concat(lista_seguridad, ignore_index=True) if lista_seguridad else pd.DataFrame()
+    df_demanda_final = pd.concat(lista_demanda, ignore_index=True) if lista_demanda else pd.DataFrame()
+    df_cmg_final = pd.concat(lista_cmg, ignore_index=True) if lista_cmg else pd.DataFrame()
+    
+    return df_final, df_inter_final, df_seguridad_final, df_demanda_final, df_cmg_final, alertas
+
 
 # --- 3. INTERFAZ DE USUARIO ---
 st.sidebar.header("⚙️ Parámetros del Dashboard SEIN")
-hoy = datetime.now().date()
-rango_fechas = st.sidebar.date_input("Intervalo de Fechas", value=(hoy,hoy))
 
-if st.sidebar.button("📊 Extraer Información - IEOD ", type="primary"):
+# Fechas por defecto: Día de hoy
+hoy = datetime.now().date()
+rango_fechas = st.sidebar.date_input("Intervalo de Fechas", value=(hoy, hoy))
+
+if st.sidebar.button("📊 Extraer Despacho - SEIN Completo", type="primary"):
     if isinstance(rango_fechas, tuple) and len(rango_fechas) == 2:
         start_date, end_date = rango_fechas
         status_text = st.empty()
         progress_bar = st.progress(0)
         
-        df_consolidado, df_inter_consolidado, df_seg_consolidado, df_dem_consolidado, alertas = procesar_rango_fechas(start_date, end_date, progress_bar, status_text, dict_recursos_maestro)
+        df_consolidado, df_inter_consolidado, df_seg_consolidado, df_dem_consolidado, df_cmg_consolidado, alertas = procesar_rango_fechas(start_date, end_date, progress_bar, status_text, dict_recursos_maestro)
         
         st.session_state['df_despacho'] = df_consolidado
         st.session_state['df_interconexiones'] = df_inter_consolidado
         st.session_state['df_seguridad'] = df_seg_consolidado
         st.session_state['df_demanda'] = df_dem_consolidado
+        st.session_state['df_cmg'] = df_cmg_consolidado
         st.session_state['alertas_despacho'] = alertas
             
         status_text.empty()
         progress_bar.empty()
+
 
 # --- 4. VISUALIZACIÓN DE DATOS ---
 if 'df_despacho' in st.session_state:
@@ -574,10 +653,69 @@ if 'df_despacho' in st.session_state:
                     st.info("La vista por Tipo de Generación requiere el formato AnexoA (con metadatos), el archivo actual no lo contiene.")
 
                 # ==========================================
-                # 2. FLUJO DE ENLACES (CENTRO-NORTE Y CENTRO-SUR)
+                # 2. COSTOS MARGINALES (CMg) EN BARRAS DE REFERENCIA
                 # ==========================================
                 st.markdown("---")
-                st.header("2. 🔌 Flujo de Enlaces")
+                st.header("2. 💸 Evolución del Costo Marginal (CMg)")
+                
+                df_cmg_raw = st.session_state.get('df_cmg', pd.DataFrame())
+                
+                if df_cmg_raw.empty:
+                    st.info("No se encontraron datos de Costos Marginales en el periodo descargado.")
+                else:
+                    df_cmg_plot = df_cmg_raw.sort_values(['FECHA_HORA', 'BARRA']).copy()
+                    
+                    colores_barra = {'SANTA ROSA 220': '#d62728', 'MONTALVO 220': '#2ca02c', 'PIURA OESTE 220': '#1f77b4'}
+                    
+                    fig_cmg = px.line(
+                        df_cmg_plot, x="FECHA_HORA", y="CMG_USD", color="BARRA",
+                        title="Costo Marginal por Barra de Referencia (S/./MWh)",
+                        labels={"BARRA": "Barra 220 kV", "CMG_USD": "Costo Marginal (S/./MWh)"},
+                        color_discrete_map=colores_barra, template="plotly_white"
+                    )
+                    fig_cmg.update_traces(hovertemplate="%{y:,.2f} S/./MWh", line=dict(width=2, dash='dot'))
+                    
+                    def graficar_min_max_cmg(fig, df_filtro, color_marcador, nombre_barra):
+                        if not df_filtro.empty:
+                            idx_max = df_filtro['CMG_USD'].idxmax()
+                            idx_min = df_filtro['CMG_USD'].idxmin()
+                            
+                            fig.add_scatter(
+                                x=[df_filtro.loc[idx_max, 'FECHA_HORA']], y=[df_filtro.loc[idx_max, 'CMG_USD']],
+                                mode='markers+text', marker=dict(color=color_marcador, size=10, symbol='triangle-up'),
+                                text=[f"Máx: {df_filtro.loc[idx_max, 'CMG_USD']:,.1f}"], textposition="top center",
+                                name=f'Máx {nombre_barra}', hoverinfo='skip', showlegend=False
+                            )
+                            fig.add_scatter(
+                                x=[df_filtro.loc[idx_min, 'FECHA_HORA']], y=[df_filtro.loc[idx_min, 'CMG_USD']],
+                                mode='markers+text', marker=dict(color=color_marcador, size=10, symbol='triangle-down'),
+                                text=[f"Mín: {df_filtro.loc[idx_min, 'CMG_USD']:,.1f}"], textposition="bottom center",
+                                name=f'Mín {nombre_barra}', hoverinfo='skip', showlegend=False
+                            )
+
+                    for barra in df_cmg_plot['BARRA'].unique():
+                        graficar_min_max_cmg(fig_cmg, df_cmg_plot[df_cmg_plot['BARRA'] == barra], colores_barra.get(barra, 'black'), barra)
+                    
+                    max_val_cmg = df_cmg_plot['CMG_USD'].max()
+                    fig_cmg.update_layout(
+                        hovermode="x unified", xaxis=dict(tickformat="%d/%m\n%H:%M", title="Fecha Operativa"),
+                        yaxis=dict(title="Costo Marginal (S/./MWh)", range=[0, max_val_cmg * 1.15 if max_val_cmg > 0 else 50]),
+                        height=550, margin=dict(t=50, b=50, l=50, r=20)
+                    )
+                    st.plotly_chart(fig_cmg, use_container_width=True)
+                    
+                    with st.expander("Ver Datos de CMg (Vista Matricial)"):
+                        df_cmg_pivot = df_cmg_plot.copy()
+                        df_cmg_pivot['FECHA'] = df_cmg_pivot['FECHA_HORA'].dt.strftime('%d/%m/%Y')
+                        df_cmg_pivot['HORA'] = df_cmg_pivot['FECHA_HORA'].dt.strftime('%H:%M')
+                        matriz_cmg = df_cmg_pivot.pivot_table(index=['FECHA', 'HORA'], columns=['BARRA'], values='CMG_USD', aggfunc='mean').round(2)
+                        st.dataframe(matriz_cmg, use_container_width=True)
+
+                # ==========================================
+                # 3. FLUJO DE ENLACES (CENTRO-NORTE Y CENTRO-SUR)
+                # ==========================================
+                st.markdown("---")
+                st.header("3. 🔌 Flujo de Enlaces")
                 
                 if df_inter_raw.empty:
                     st.info("No se encontraron datos de enlaces en el periodo descargado.")
@@ -682,10 +820,10 @@ if 'df_despacho' in st.session_state:
                         st.dataframe(df_mat_inter, use_container_width=True)
 
                 # ==========================================
-                # 3. GENERACIÓN SEIN (SIN DEMANDA)
+                # 4. GENERACIÓN SEIN (SIN DEMANDA)
                 # ==========================================
                 st.markdown("---")
-                st.header("3. 📊 Generación del SEIN por Central")
+                st.header("4. 📊 Generación del SEIN por Central")
                 
                 df_plot_cen_aux = df_plot_cen.copy().dropna(subset=['CENTRAL'])
                 df_plot_cen_aux['DESPACHO_MW'] = pd.to_numeric(df_plot_cen_aux['DESPACHO_MW'], errors='coerce').fillna(0)
@@ -719,15 +857,15 @@ if 'df_despacho' in st.session_state:
                 st.plotly_chart(fig_cen, use_container_width=True)
 
                 # ==========================================
-                # 4. POTENCIA PROMEDIO DIARIA
+                # 5. POTENCIA PROMEDIO DIARIA
                 # ==========================================
                 st.markdown("---")
-                st.header("4. 📈 Potencia Promedio Diaria (SEIN)")
+                st.header("5. 📈 Potencia Promedio Diaria (SEIN)")
                 
                 # CORRECCIÓN DE EFECTO DE BORDE: Asignar las 00:00 al día operativo correcto restando 1 minuto
                 df_plot_cen['FECHA_DIA_OPERATIVO'] = (df_plot_cen['FECHA_HORA'] - pd.Timedelta(minutes=1)).dt.date
                 
-                # Gráfica 4.1: Promedio de todo el día (24 Horas / 48 Periodos)
+                # Gráfica 5.1: Promedio de todo el día (24 Horas / 48 Periodos)
                 df_promedio = df_plot_cen.groupby(['FECHA_DIA_OPERATIVO', 'CENTRAL'], as_index=False)['DESPACHO_MW'].mean()
                 df_promedio['FECHA_DIA_OPERATIVO'] = pd.to_datetime(df_promedio['FECHA_DIA_OPERATIVO']).dt.strftime('%d/%m/%Y')
                 
@@ -742,7 +880,7 @@ if 'df_despacho' in st.session_state:
                 fig_prom.update_layout(xaxis=dict(type='category'), height=500)
                 st.plotly_chart(fig_prom, use_container_width=True)
 
-                # Gráfica 4.2: Promedio Operativo (Solo en periodos con inyección > 0 MW)
+                # Gráfica 5.2: Promedio Operativo (Solo en periodos con inyección > 0 MW)
                 df_solo_inyeccion = df_plot_cen[df_plot_cen['DESPACHO_MW'] > 0].copy()
                 
                 if not df_solo_inyeccion.empty:
@@ -764,24 +902,80 @@ if 'df_despacho' in st.session_state:
                     st.info("No se registraron periodos con inyección de potencia mayor a 0 MW para calcular el promedio operativo.")
 
                 # ==========================================
-                # 5. CONTROL DE TIEMPOS: INACTIVIDAD Y OPERACIÓN
+                # 6. CONTROL DE TIEMPOS: INACTIVIDAD Y OPERACIÓN
                 # ==========================================
                 st.markdown("---")
-                st.header("5. ⏱️ Control de Tiempos: Inactividad y Operación (SEIN)")
+                st.header("6. ⏱️ Control de Tiempos: Inactividad y Operación (SEIN)")
+                
+                # --- PREPARACIÓN DE BLOQUES GANTT ---
+                df_gantt = df_datos.copy()
+                df_gantt = df_gantt.sort_values(['CENTRAL', 'FECHA_HORA'])
+                
+                # Clasificar estado operativo
+                df_gantt['ESTADO'] = np.where(df_gantt['DESPACHO_MW'] > 0, 'OPERANDO', 'INACTIVO')
+                
+                # Detectar cambios de estado lógico para crear bloques continuos de tiempo
+                df_gantt['CAMBIO_ESTADO'] = (df_gantt['ESTADO'] != df_gantt['ESTADO'].shift(1)) | (df_gantt['CENTRAL'] != df_gantt['CENTRAL'].shift(1))
+                df_gantt['BLOQUE'] = df_gantt['CAMBIO_ESTADO'].cumsum()
+                
+                # Agrupar para obtener el inicio y fin de cada bloque
+                df_bloques = df_gantt.groupby(['CENTRAL', 'TIPO_CENTRAL', 'ESTADO', 'BLOQUE'], as_index=False).agg(
+                    INICIO=('FECHA_HORA', 'min'),
+                    FIN=('FECHA_HORA', 'max')
+                )
+                # Sumar 30 minutos al final para cerrar el intervalo de manera exacta
+                df_bloques['FIN'] = df_bloques['FIN'] + pd.Timedelta(minutes=30)
+                
+                # Fijar límites del Eje X para todos los Gantt (Intervalo de evaluación completo)
+                fecha_inicio_gantt = df_datos['FECHA_HORA'].min()
+                fecha_fin_gantt = df_datos['FECHA_HORA'].max() + pd.Timedelta(minutes=30)
+                
+                # --- GANTT 1: INACTIVIDAD (EXCLUYENDO DIÉSEL) ---
+                st.markdown("#### 🚥 Cronograma de Inactividad (Tecnologías Base y Renovables)")
+                st.info("Visualización de los bloques horarios donde las unidades NO inyectaron potencia (0 MW), excluyendo intencionalmente a las térmicas Diésel/Residual.")
+                
+                # FILTRO CLAVE: Bloques inactivos excluyendo DIESEL/RESIDUAL
+                df_bloques_inactivos = df_bloques[(df_bloques['ESTADO'] == 'INACTIVO') & (df_bloques['TIPO_CENTRAL'] != 'DIESEL/RESIDUAL')].copy()
+                
+                if df_bloques_inactivos.empty:
+                    st.success("✅ No se detectaron periodos de inactividad para las unidades base/renovables seleccionadas.")
+                else:
+                    fig_gantt_inact = px.timeline(
+                        df_bloques_inactivos, 
+                        x_start="INICIO", 
+                        x_end="FIN", 
+                        y="CENTRAL", 
+                        color="TIPO_CENTRAL",
+                        hover_data={"INICIO": "|%d/%m/%Y %H:%M", "FIN": "|%d/%m/%Y %H:%M"},
+                        color_discrete_map=colores_tecnologia,
+                        template="plotly_white"
+                    )
+                    
+                    fig_gantt_inact.update_yaxes(autorange="reversed")
+                    fig_gantt_inact.update_layout(
+                        xaxis=dict(tickformat="%d/%m\n%H:%M", title="Línea de Tiempo (Periodos Inactivos)", range=[fecha_inicio_gantt, fecha_fin_gantt]),
+                        yaxis=dict(title="Unidad Generadora", dtick=1),
+                        height=max(400, len(df_bloques_inactivos['CENTRAL'].unique()) * 22),
+                        margin=dict(t=30, b=50, l=50, r=20),
+                        legend=dict(title="Tecnología", orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    st.plotly_chart(fig_gantt_inact, use_container_width=True)
+
+                # --- RESUMEN ACUMULADO (BARRAS INACTIVIDAD) ---
+                st.markdown("#### 📊 Resumen Acumulado de Horas por Unidad")
                 
                 df_tiempos = df_datos.copy()
                 df_tiempos['INACTIVO_HR'] = (df_tiempos['DESPACHO_MW'] == 0) * 0.5
                 df_tiempos['ACTIVO_HR'] = (df_tiempos['DESPACHO_MW'] > 0) * 0.5
                 df_resumen_tiempos = df_tiempos.groupby(['CENTRAL', 'TIPO_CENTRAL'], as_index=False)[['INACTIVO_HR', 'ACTIVO_HR']].sum()
                 
-                # Gráfica 1: Horas No Despachadas
                 tipos_inactividad = ['HIDROELÉCTRICA', 'HIDROELECTRICA', 'EÓLICA', 'EOLICA', 'SOLAR', 'BIOMASA', 'GAS DE LA SELVA', 'GAS CAMISEA', 'GAS NORTE']
                 df_inactividad = df_resumen_tiempos[df_resumen_tiempos['TIPO_CENTRAL'].isin(tipos_inactividad)].copy()
                 
                 if not df_inactividad.empty:
                     fig_inactividad = px.bar(
                         df_inactividad, x='CENTRAL', y='INACTIVO_HR', color='TIPO_CENTRAL',
-                        title="Horas No Despachadas (Inactividad) por Central",
+                        title="Horas No Despachadas (Inactividad) por Central (Excluye Diésel)",
                         labels={'CENTRAL': 'Central Generadora', 'INACTIVO_HR': 'Horas Inactivas (h)', 'TIPO_CENTRAL': 'Tipo'},
                         color_discrete_map=colores_tecnologia,
                         template="plotly_white"
@@ -791,28 +985,65 @@ if 'df_despacho' in st.session_state:
                 else:
                     st.info("No hay datos de las tecnologías seleccionadas para inactividad.")
 
-                # Gráfica 2: Horas de Operación (Diesel/Residual)
+                # --- GANTT 2: ACTIVIDAD DIESEL/RESIDUAL ---
+                st.markdown("---")
+                st.markdown("#### 🚨 Cronograma de Operación (Diésel / Residual)")
+                st.info("Visualización de los bloques donde las centrales Diesel/Residual inyectaron energía a la red.")
+                
+                # FILTRO CLAVE: Bloques activos solo para DIESEL/RESIDUAL
+                df_bloques_diesel = df_bloques[(df_bloques['ESTADO'] == 'OPERANDO') & (df_bloques['TIPO_CENTRAL'] == 'DIESEL/RESIDUAL')].copy()
+                
+                if df_bloques_diesel.empty:
+                    st.success("✅ Las unidades Diésel/Residual seleccionadas no registraron inyección de energía en el periodo evaluado.")
+                else:
+                    fig_gantt_diesel = px.timeline(
+                        df_bloques_diesel, 
+                        x_start="INICIO", 
+                        x_end="FIN", 
+                        y="CENTRAL", 
+                        color="TIPO_CENTRAL",
+                        hover_data={"INICIO": "|%d/%m/%Y %H:%M", "FIN": "|%d/%m/%Y %H:%M"},
+                        color_discrete_map=colores_tecnologia,
+                        template="plotly_white"
+                    )
+                    
+                    fig_gantt_diesel.update_yaxes(autorange="reversed")
+                    fig_gantt_diesel.update_layout(
+                        xaxis=dict(tickformat="%d/%m\n%H:%M", title="Línea de Tiempo (Periodos de Inyección)", range=[fecha_inicio_gantt, fecha_fin_gantt]),
+                        yaxis=dict(title="Unidad Diésel/Residual", dtick=1),
+                        height=max(300, len(df_bloques_diesel['CENTRAL'].unique()) * 22),
+                        margin=dict(t=30, b=50, l=50, r=20),
+                        showlegend=False # Oculto pues sabemos que es de tecnología Diésel
+                    )
+                    st.plotly_chart(fig_gantt_diesel, use_container_width=True)
+
+                # --- RESUMEN ACUMULADO (BARRAS ACTIVIDAD DIESEL) ---
                 tipos_actividad = ['DIESEL/RESIDUAL']
                 df_actividad = df_resumen_tiempos[df_resumen_tiempos['TIPO_CENTRAL'].isin(tipos_actividad)].copy()
                 
                 if not df_actividad.empty:
-                    fig_actividad = px.bar(
-                        df_actividad, x='CENTRAL', y='ACTIVO_HR', color='TIPO_CENTRAL',
-                        title="Horas de Operación (Centrales Diésel/Residual)",
-                        labels={'CENTRAL': 'Central Generadora', 'ACTIVO_HR': 'Horas de Operación (h)', 'TIPO_CENTRAL': 'Tipo'},
-                        color_discrete_map=colores_tecnologia,
-                        template="plotly_white"
-                    )
-                    fig_actividad.update_layout(xaxis={'categoryorder':'total descending'}, height=450)
-                    st.plotly_chart(fig_actividad, use_container_width=True)
+                    # Filtramos para mostrar solo las barras de las unidades que efectivamente operaron > 0 hrs
+                    df_actividad_plot = df_actividad[df_actividad['ACTIVO_HR'] > 0]
+                    if not df_actividad_plot.empty:
+                        fig_actividad = px.bar(
+                            df_actividad_plot, x='CENTRAL', y='ACTIVO_HR', color='TIPO_CENTRAL',
+                            title="Horas Totales de Operación Activa (Centrales Diésel/Residual)",
+                            labels={'CENTRAL': 'Central Generadora', 'ACTIVO_HR': 'Horas de Operación (h)', 'TIPO_CENTRAL': 'Tipo'},
+                            color_discrete_map=colores_tecnologia,
+                            template="plotly_white"
+                        )
+                        fig_actividad.update_layout(xaxis={'categoryorder':'total descending'}, height=400)
+                        st.plotly_chart(fig_actividad, use_container_width=True)
+                    else:
+                        st.info("No se registraron horas acumuladas de operación Diésel/Residual en la selección actual.")
                 else:
-                    st.info("No hay centrales Diésel/Residual operando o en la selección.")
+                    st.info("No hay centrales Diésel/Residual presentes en la selección actual.")
 
                 # ==========================================
-                # 6. CALIFICACIÓN DE LA OPERACIÓN (ENLAZADA AL FILTRO)
+                # 7. CALIFICACIÓN DE LA OPERACIÓN (ENLAZADA AL FILTRO)
                 # ==========================================
                 st.markdown("---")
-                st.header("6. 🛡️ Calificación de la Operación")
+                st.header("7. 🛡️ Calificación de la Operación")
                 
                 if df_seg_raw.empty:
                     st.info("No se registraron calificaciones de operación en la hoja CALIFICA_OPE_UG para el periodo consultado.")
@@ -952,10 +1183,10 @@ if 'df_despacho' in st.session_state:
                                 use_container_width=True
                             )
                 # ==========================================
-                # 7. EVOLUCIÓN Y COMPORTAMIENTO DE LA DEMANDA
+                # 8. EVOLUCIÓN Y COMPORTAMIENTO DE LA DEMANDA
                 # ==========================================
                 st.markdown("---")
-                st.header("7. 🌍 Evolución y Comportamiento de la Demanda por Áreas")
+                st.header("8. 🌍 Evolución y Comportamiento de la Demanda por Áreas")
                 
                 if df_dem_raw is None or df_dem_raw.empty:
                     st.info("No se encontraron datos de demanda en el periodo descargado.")
@@ -1032,10 +1263,10 @@ if 'df_despacho' in st.session_state:
                     st.plotly_chart(fig_demanda, use_container_width=True)
 
                 # ==========================================
-                # 8. TRAZABILIDAD (DATA CRUDA)
+                # 9. TRAZABILIDAD (DATA CRUDA)
                 # ==========================================
                 st.markdown("---")
-                st.header("8. 🗄️ Trazabilidad de Potencia (Data Cruda - SEIN)")
+                st.header("9. 🗄️ Trazabilidad de Potencia (Data Cruda - SEIN)")
                 
                 with st.expander("Ver Matriz de Despacho de Generación", expanded=False):
                     df_pivot = df_plot_cen.copy()
@@ -1063,3 +1294,4 @@ if 'df_despacho' in st.session_state:
                         file_name=f"matriz_sein_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
+                
