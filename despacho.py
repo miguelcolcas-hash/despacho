@@ -437,10 +437,20 @@ if st.sidebar.button("📊 Extraer Despacho - SEIN Completo", type="primary"):
         start_date, end_date = rango_fechas
         
         # =========================================================================
-        # AUTOMATIZACIÓN: SE MODIFICA PARA LIMPIAR LA CACHÉ INTERNAMENTE AL INICIAR
+        # AUTOMATIZACIÓN OPTIMIZADA: LIMPIAR CACHÉ SOLO DEL ÚLTIMO DÍA (end_date)
         # =========================================================================
-        st.cache_data.clear() # <--- Fuerza la descarga limpia de archivos retrasados del COES
-        
+        # En lugar de st.cache_data.clear() que borraba toda la historia, 
+        # limpiamos solo el último día evaluado. Si el COES subió el archivo tarde, 
+        # lo forzará a descargar sin tocar la memoria de los días anteriores.
+        try:
+            # Reemplaza estos nombres si tus funciones en la Sección 2 se llaman distinto
+            extraer_anexoa.clear(end_date)
+            extraer_cmg.clear(end_date)
+            extraer_demanda.clear(end_date)
+            extraer_interconexiones.clear(end_date)
+        except Exception:
+            pass # Si el dato de ese día no existía previamente en caché, pasa silenciosamente
+            
         status_text = st.empty()
         progress_bar = st.progress(0)
         
