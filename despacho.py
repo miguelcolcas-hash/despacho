@@ -1440,7 +1440,7 @@ if 'df_despacho' in st.session_state:
                 # ==========================================
                 st.markdown("---")
                 st.header("10. 📉 Balance de Potencia - Área Norte")
-                st.info("Evolución temporal del comportamiento eléctrico en el Norte del país: Superposición de la Demanda del Área Norte, la Generación local total del Norte y el inverso multiplicativo del Flujo de Interconexión Centro-Norte (-1 * Flujo C-N).")
+                st.info("Evolución temporal del comportamiento eléctrico en el Norte del país: Superposición de la Demanda del Área Norte (calculada como la suma de los valores absolutos de Generación y Flujo), la Generación local total del Norte y el inverso multiplicativo del Flujo de Interconexión Centro-Norte (-1 * Flujo C-N).")
                 
                 df_dem_raw = st.session_state.get('df_demanda', pd.DataFrame())
                 df_inter_raw = st.session_state.get('df_interconexiones', pd.DataFrame())
@@ -1451,7 +1451,7 @@ if 'df_despacho' in st.session_state:
                 else:
                     import plotly.graph_objects as go
                     
-                    # 1. Agrupar la Demanda real registrada para el Área Norte
+                    # 1. Agrupar la Demanda real registrada para el Área Norte (Servirá como base de tiempo)
                     df_dem_norte = df_dem_raw[df_dem_raw['ÁREA'] == 'NORTE'].groupby('FECHA_HORA', as_index=False)['DEMANDA_MW'].sum()
                     
                     # 2. Capturar el Flujo Neto Centro-Norte e invertir su signo (* -1)
@@ -1466,6 +1466,10 @@ if 'df_despacho' in st.session_state:
                     df_balance = df_dem_norte.merge(df_cn_total[['FECHA_HORA', 'FLUJO_NEG']], on='FECHA_HORA', how='inner')
                     df_balance = df_balance.merge(df_gen_norte, on='FECHA_HORA', how='inner')
                     df_balance.columns = ['FECHA_HORA', 'DEMANDA', 'FLUJO_NEG', 'GENERACION']
+                    
+                    # --- CÁLCULO CORREGIDO DE LA DEMANDA ---
+                    # Demanda Norte = |Generación Norte| + |-1 * Flujo C-N|
+                    df_balance['DEMANDA'] = df_balance['GENERACION'].abs() + df_balance['FLUJO_NEG'].abs()
                     
                     fig_balance = go.Figure()
                     
@@ -1493,7 +1497,7 @@ if 'df_despacho' in st.session_state:
                         hovertemplate="<b>-1 * Flujo C-N</b>: %{y:,.2f} MW"
                     ))
                     
-                    # Subrutina para inyectar marcadores de extremos (Máximos/Mínimos) en negrita
+                    # Subrutina para inyectar marcadores de extremos (Máximos/Mínimos) en negrita, azules y con 2 decimales
                     def marcar_extremos_balance(fig, x_data, y_data, color_marcador):
                         if not y_data.empty:
                             idx_max = y_data.idxmax()
@@ -1502,16 +1506,16 @@ if 'df_despacho' in st.session_state:
                             fig.add_trace(go.Scatter(
                                 x=[x_data[idx_max]], y=[y_data[idx_max]],
                                 mode='markers+text', marker=dict(color=color_marcador, size=10, symbol='triangle-up'),
-                                text=[f"<b>Máx: {y_data[idx_max]:,.0f}</b>"], textposition="top center",
+                                text=[f"<b>Máx: {y_data[idx_max]:,.2f}</b>"], textposition="top center", # <--- 2 DECIMALES
                                 showlegend=False, hoverinfo='skip',
                                 textfont=dict(color="blue")
                             ))
                             fig.add_trace(go.Scatter(
                                 x=[x_data[idx_min]], y=[y_data[idx_min]],
                                 mode='markers+text', marker=dict(color=color_marcador, size=10, symbol='triangle-down'),
-                                text=[f"<b>Mín: {y_data[idx_min]:,.0f}</b>"], textposition="bottom center",
+                                text=[f"<b>Mín: {y_data[idx_min]:,.2f}</b>"], textposition="bottom center", # <--- 2 DECIMALES
                                 showlegend=False, hoverinfo='skip',
-                                textfont=dict(color="blue"),
+                                textfont=dict(color="blue")
                             ))
                     
                     # Marcar picos y valles para cada una de las series
@@ -1557,6 +1561,7 @@ if 'df_despacho' in st.session_state:
                         # Reordenar columnas para legibilidad
                         matriz_b = matriz_b[['DEMANDA', 'GENERACION', 'FLUJO_NEG']]
                         st.dataframe(matriz_b, use_container_width=True)
+
                 # ==========================================
                 # 11. EVOLUCIÓN GLOBAL DE COSTOS MARGINALES (CMg)
                 # ==========================================
