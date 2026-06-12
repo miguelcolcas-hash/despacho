@@ -173,6 +173,11 @@ def extraer_datos_despacho(fecha, dict_recursos):
                         if pd.notna(p):
                             nombre_base_crudo = str(p).strip().upper()
                             
+                            # --- HOMOLOGACIÓN DE NOMENCLATURA DEL COES ---
+                            if nombre_base_crudo == 'CARPAPATA':
+                                nombre_base_crudo = 'CARPAPATA I'
+                            # ---------------------------------------------
+                            
                             if nombre_base_crudo != '' and 'MW' not in nombre_base_crudo:
                                 tipo_excel = str(tipos_raw[i]).strip().upper() if pd.notna(tipos_raw[i]) else "N/A"
                                 
@@ -225,7 +230,7 @@ def extraer_datos_despacho(fecha, dict_recursos):
                     df_melt['TIPO_CENTRAL'] = df_melt['CENTRAL'].map(lambda x: dict_metadatos[x]['TIPO_CENTRAL'])
                     df_melt['EMPRESA'] = df_melt['CENTRAL'].map(lambda x: dict_metadatos[x]['EMPRESA'])
                     df_melt = df_melt.groupby(['FECHA_HORA', 'CENTRAL', 'ZONA', 'TIPO_CENTRAL', 'EMPRESA'], as_index=False)['DESPACHO_MW'].sum()
-                
+
                 # ==========================================
                 # EXTRACCIÓN HOJA: DEMANDA_AREAS
                 # ==========================================
@@ -428,28 +433,29 @@ def procesar_rango_fechas(start_date, end_date, progress_bar, status_text, dict_
 # --- 3. INTERFAZ DE USUARIO ---
 st.sidebar.header("⚙️ Parámetros del Dashboard SEIN")
 
-# Fechas por defecto: Día de hoy
-hoy = datetime.now().date()
-rango_fechas = st.sidebar.date_input("Intervalo de Fechas", value=(hoy, hoy))
+# =========================================================================
+# LÓGICA DE FECHAS: DÍA DE AYER
+# =========================================================================
+# El IEOD y el CMg del día de hoy no se emiten hasta que finaliza el día operativo.
+# Por lo tanto, por defecto siempre evaluamos hasta el día de ayer.
+ayer = datetime.now().date() - timedelta(days=1)
+rango_fechas = st.sidebar.date_input("Intervalo de Fechas", value=(ayer, ayer))
 
 if st.sidebar.button("📊 Extraer Despacho - SEIN Completo", type="primary"):
     if isinstance(rango_fechas, tuple) and len(rango_fechas) == 2:
         start_date, end_date = rango_fechas
         
         # =========================================================================
-        # AUTOMATIZACIÓN OPTIMIZADA: LIMPIAR CACHÉ SOLO DEL ÚLTIMO DÍA (end_date)
+        # AUTOMATIZACIÓN OPTIMIZADA: LIMPIAR CACHÉ DEL ÚLTIMO DÍA (end_date)
         # =========================================================================
-        # En lugar de st.cache_data.clear() que borraba toda la historia, 
-        # limpiamos solo el último día evaluado. Si el COES subió el archivo tarde, 
-        # lo forzará a descargar sin tocar la memoria de los días anteriores.
         try:
-            # Reemplaza estos nombres si tus funciones en la Sección 2 se llaman distinto
-            extraer_anexoa.clear(end_date)
+            # 1. Limpia la caché del despacho general pasando sus DOS argumentos exactos
+            extraer_datos_despacho.clear(end_date, dict_recursos_maestro)
+            
+            # 2. Limpia la caché de Costos Marginales pasando su ÚNICO argumento exacto
             extraer_cmg.clear(end_date)
-            extraer_demanda.clear(end_date)
-            extraer_interconexiones.clear(end_date)
         except Exception:
-            pass # Si el dato de ese día no existía previamente en caché, pasa silenciosamente
+            pass # Si es la primera vez que se presiona y no hay caché, pasa silenciosamente
             
         status_text = st.empty()
         progress_bar = st.progress(0)
@@ -465,7 +471,6 @@ if st.sidebar.button("📊 Extraer Despacho - SEIN Completo", type="primary"):
             
         status_text.empty()
         progress_bar.empty()
-
 
 # --- 4. VISUALIZACIÓN DE DATOS ---
 if 'df_despacho' in st.session_state:
@@ -512,33 +517,59 @@ if 'df_despacho' in st.session_state:
         filtro_tipo = st.sidebar.multiselect("⚡ Tipo de Recurso:", options=opts_tipo, placeholder="Todas")
         df_f5 = df_f4[df_f4['TIPO_GENERACION'].isin(filtro_tipo)] if filtro_tipo else df_f4
 
-        # Filtro 6: Central
-        opts_cen = sorted([x for x in df_f5['CENTRAL'].unique() if x])
-        filtro_cen = st.sidebar.multiselect("🏭 Central:", options=opts_cen, placeholder="Todas")
+        # ==========================================
+        # FILTRO 6: CENTRAL 
+        # ==========================================
+        # 1. Limpiamos el texto del maestro
+        df_f5['CENTRAL'] = df_f5['CENTRAL'].astype(str).str.strip() 
+        opts_cen = sorted([x for x in df_f5['CENTRAL'].unique() if x and str(x) != "nan"])
+        
+        # 2. UI con 'key' única para evitar el error de StreamlitDuplicateElementId
+        filtro_cen = st.sidebar.multiselect(
+            "🏭 Central:", 
+            options=opts_cen, 
+            placeholder="Todas",
+            key="filtro_central_unico"
+        )
+        
+        # 3. Filtramos el maestro según selección
         df_f_final = df_f5[df_f5['CENTRAL'].isin(filtro_cen)] if filtro_cen else df_f5
+        
+        # =========================================================================
+        # ENLACE MAESTRO: CARGA ESTRICTA DESDE CetralesSEIN.xlsx
+        # =========================================================================
+        # 1. Extraemos los parámetros permitidos DIRECTAMENTE del archivo maestro filtrado
+        nombres_maestro = set(df_f_final['CENTRAL'].astype(str).str.strip().str.upper())
+        tipos_maestro = set(df_f_final['TIPO_GENERACION'].astype(str).str.strip().str.upper())
+        zonas_maestro = set(df_f_final['AREA_OPERATIVA'].astype(str).str.strip().str.upper())
+        empresas_maestro = set(df_f_final['EMPRESA_DESPACHO'].astype(str).str.strip().str.upper())
 
-        # Consolidar listas finales para enlace
-        centrales_filtradas = df_f_final['CENTRAL'].str.strip().str.upper().tolist()
-        nombres_calificacion_activos = [str(n).strip().upper() for n in df_f_final['CENTRAL_CALIFICACION'].unique() if n and n != "N/A" and str(n).lower() != 'nan']
-
-        # Enlace ultra-robusto del Filtro con df_raw
-        def es_central_valida(central_name):
-            # Elimina sufijos como "(BIO)", "(HID)", "(GAS)" generados en ETL
-            nom_limpio = re.sub(r'\s*\([^)]*\)$', '', str(central_name)).strip().upper()
-            
-            # Validación flexible de coincidencia parcial
-            for c_filt in centrales_filtradas:
-                if c_filt == nom_limpio or c_filt in nom_limpio or nom_limpio in c_filt:
-                    return True
-            return False
-
-        df_datos = df_raw[df_raw['CENTRAL'].apply(es_central_valida)]
+        # 2. Limpiamos la columna de datos crudos (quitamos el sufijo "(HID)", "(GAS)" del ETL)
+        df_raw['CENTRAL_BASE'] = df_raw['CENTRAL'].astype(str).apply(
+            lambda x: re.sub(r'\s*\([^)]*\)$', '', x).strip().upper()
+        )
+        
+        # 3. Aplicamos un cruce matricial estricto (INTERSECCIÓN LÓGICA)
+        # Solo pasará la fila si el nombre exacto está en el maestro
+        mascara_nombres = df_raw['CENTRAL_BASE'].isin(nombres_maestro)
+        
+        # Exigimos también que Tipo, Zona y Empresa coincidan con el maestro si se usaron esos filtros
+        mascara_tipos = df_raw['TIPO_CENTRAL'].astype(str).str.strip().str.upper().isin(tipos_maestro) if filtro_tipo else True
+        mascara_zonas = df_raw['ZONA'].astype(str).str.strip().str.upper().isin(zonas_maestro) if filtro_zona else True
+        mascara_empresas = df_raw['EMPRESA'].astype(str).str.strip().str.upper().isin(empresas_maestro) if filtro_empresa else True
+        
+        # Filtramos la data cruda aplicando todas las máscaras simultáneamente
+        df_datos = df_raw[mascara_nombres & mascara_tipos & mascara_zonas & mascara_empresas].copy()
+        
+        # Variables complementarias que usan las gráficas posteriores
+        centrales_filtradas = list(nombres_maestro)
+        nombres_calificacion_activos = [str(n).strip().upper() for n in df_f_final['CENTRAL_CALIFICACION'].unique() if pd.notna(n) and n != "N/A"]
         
         if df_datos.empty:
             st.warning("⚠️ No hay datos despachados para las centrales filtradas en las fechas seleccionadas.")
         else:
             st.success("✅ Datos mostrados correctamente.")
-            
+
             # Definición centralizada de colores para usar en todo el dashboard (ACTUALIZADO SEGÚN ESPECIFICACIÓN)
             colores_tecnologia = {
                 "EÓLICA": "#808080", "EOLICA": "#808080",       # Plomo
@@ -671,6 +702,37 @@ if 'df_despacho' in st.session_state:
 
                     fig_tipo = crear_grafica_area(df_tipo, 'TIPO_CENTRAL', "Curva Apilada por Tecnología - SEIN (MW)", color_map=colores_tecnologia)
                     st.plotly_chart(fig_tipo, use_container_width=True)
+
+                    # --- NUEVO: Trazabilidad y Descarga de Datos ---
+                    with st.expander("Ver Datos de Despacho por Tecnología (Vista Matricial)"):
+                        # Preparamos los datos pivoteados
+                        df_tipo_pivot = df_tipo.copy()
+                        df_tipo_pivot['FECHA'] = df_tipo_pivot['FECHA_HORA'].dt.strftime('%d/%m/%Y')
+                        df_tipo_pivot['HORA'] = df_tipo_pivot['FECHA_HORA'].dt.strftime('%H:%M')
+
+                        df_mat_tipo = df_tipo_pivot.pivot_table(
+                            index=['FECHA', 'HORA'],
+                            columns='TIPO_CENTRAL',
+                            values='DESPACHO_MW',
+                            aggfunc='sum'
+                        ).round(2).fillna(0)
+
+                        st.markdown("**Matriz: Despacho por Tipo de Generación (MW)**")
+                        st.dataframe(df_mat_tipo, use_container_width=True)
+
+                        # Generamos el archivo Excel en memoria
+                        buffer_tipo = io.BytesIO()
+                        with pd.ExcelWriter(buffer_tipo, engine='openpyxl') as writer:
+                            df_mat_tipo.to_excel(writer, sheet_name='Despacho_Tecnologia')
+
+                        # Botón de descarga
+                        st.download_button(
+                            label="📥 Descargar Datos de Tecnología (Excel)",
+                            data=buffer_tipo.getvalue(),
+                            file_name=f"Despacho_Tecnologia_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="btn_descarga_tecnologia"
+                        )
                 else:
                     st.info("La vista por Tipo de Generación requiere el formato AnexoA (con metadatos), el archivo actual no lo contiene.")
 
@@ -1023,11 +1085,52 @@ if 'df_despacho' in st.session_state:
                 )
                 st.plotly_chart(fig_cen, use_container_width=True)
 
+                # --- NUEVO: Trazabilidad y Descarga de Datos ---
+                with st.expander("Ver Datos de Generación por Central (Vista Matricial)"):
+                    # Preparamos los datos pivoteados
+                    df_cen_pivot = df_plot_cen_aux.copy()
+                    df_cen_pivot['FECHA'] = df_cen_pivot['FECHA_HORA'].dt.strftime('%d/%m/%Y')
+                    df_cen_pivot['HORA'] = df_cen_pivot['FECHA_HORA'].dt.strftime('%H:%M')
+
+                    # Creamos la matriz (Fechas/Horas en filas, Centrales en columnas)
+                    df_mat_cen = df_cen_pivot.pivot_table(
+                        index=['FECHA', 'HORA'],
+                        columns='CENTRAL',
+                        values='DESPACHO_MW',
+                        aggfunc='sum'
+                    ).round(2).fillna(0)
+
+                    st.markdown("**Matriz: Despacho de Potencia por Unidad (MW)**")
+                    st.dataframe(df_mat_cen, use_container_width=True)
+
+                    # Generamos el archivo Excel en memoria
+                    buffer_cen = io.BytesIO()
+                    with pd.ExcelWriter(buffer_cen, engine='openpyxl') as writer:
+                        df_mat_cen.to_excel(writer, sheet_name='Generacion_Central')
+
+                    # Botón de descarga con key única para evitar conflictos
+                    st.download_button(
+                        label="📥 Descargar Datos de Generación (Excel)",
+                        data=buffer_cen.getvalue(),
+                        file_name=f"Generacion_Central_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="btn_descarga_generacion_cen"
+                    )
+
                 # ==========================================
                 # 5. POTENCIA PROMEDIO DIARIA
                 # ==========================================
                 st.markdown("---")
                 st.header("5. 📈 Potencia Promedio Diaria (SEIN)")
+                
+                # --- NUEVO: Control de visualización (Agrupado vs Apilado) ---
+                modo_visualizacion = st.radio(
+                    "Modo de visualización de barras:", 
+                    options=["Agrupado", "Apilado"], 
+                    horizontal=True,
+                    key="radio_barmode_promedio"
+                )
+                modo_barras = 'group' if modo_visualizacion == "Agrupado" else 'stack'
                 
                 # CORRECCIÓN DE EFECTO DE BORDE: Asignar las 00:00 al día operativo correcto restando 1 minuto
                 df_plot_cen['FECHA_DIA_OPERATIVO'] = (df_plot_cen['FECHA_HORA'] - pd.Timedelta(minutes=1)).dt.date
@@ -1039,7 +1142,7 @@ if 'df_despacho' in st.session_state:
                 fig_prom = px.bar(
                     df_promedio, x='FECHA_DIA_OPERATIVO', y='DESPACHO_MW', color='CENTRAL',
                     title="Potencia Promedio Diaria Total (24 Horas) (MW)",
-                    barmode='group',
+                    barmode=modo_barras, # <--- Variable conectada al radio button
                     labels={'FECHA_DIA_OPERATIVO': 'Día Operativo', 'DESPACHO_MW': 'Potencia Promedio (MW)'},
                     color_discrete_sequence=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'],
                     template="plotly_white"
@@ -1057,7 +1160,7 @@ if 'df_despacho' in st.session_state:
                     fig_prom_iny = px.bar(
                         df_promedio_iny, x='FECHA_DIA_OPERATIVO', y='DESPACHO_MW', color='CENTRAL',
                         title="Potencia Promedio en Operación (MW)",
-                        barmode='group',
+                        barmode=modo_barras, # <--- Variable conectada al radio button
                         labels={'FECHA_DIA_OPERATIVO': 'Día Operativo', 'DESPACHO_MW': 'Promedio en Operación (MW)'},
                         color_discrete_sequence=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'],
                         template="plotly_white"
@@ -1067,6 +1170,44 @@ if 'df_despacho' in st.session_state:
                 else:
                     fig_prom_iny = None
                     st.info("No se registraron periodos con inyección de potencia mayor a 0 MW para calcular el promedio operativo.")
+
+                # --- NUEVO: Trazabilidad y Descarga de Datos ---
+                with st.expander("Ver Datos de Potencia Promedio (Vista Matricial)"):
+                    # Pivoteamos los datos para mejor lectura (Fechas en filas, Centrales en columnas)
+                    df_mat_prom = df_promedio.pivot_table(
+                        index='FECHA_DIA_OPERATIVO', 
+                        columns='CENTRAL', 
+                        values='DESPACHO_MW', 
+                        aggfunc='mean'
+                    ).round(2).fillna(0)
+                    
+                    st.markdown("**Matriz: Promedio Total (24 Horas) - MW**")
+                    st.dataframe(df_mat_prom, use_container_width=True)
+                    
+                    # Generamos el archivo Excel en memoria
+                    buffer_prom = io.BytesIO()
+                    with pd.ExcelWriter(buffer_prom, engine='openpyxl') as writer:
+                        # Guardamos la hoja de 24 Horas
+                        df_mat_prom.to_excel(writer, sheet_name='Promedio_24H')
+                        
+                        # Si hay datos de operación, guardamos una segunda hoja
+                        if not df_solo_inyeccion.empty:
+                            df_mat_prom_iny = df_promedio_iny.pivot_table(
+                                index='FECHA_DIA_OPERATIVO', 
+                                columns='CENTRAL', 
+                                values='DESPACHO_MW', 
+                                aggfunc='mean'
+                            ).round(2).fillna(0)
+                            df_mat_prom_iny.to_excel(writer, sheet_name='Promedio_Operativo')
+                    
+                    # Botón de descarga
+                    st.download_button(
+                        label="📥 Descargar Datos de Promedios (Excel)",
+                        data=buffer_prom.getvalue(),
+                        file_name=f"Potencia_Promedio_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="btn_descarga_promedios"
+                    )
 
                 # ==========================================
                 # 6. CONTROL DE TIEMPOS: INACTIVIDAD Y OPERACIÓN
@@ -1187,6 +1328,7 @@ if 'df_despacho' in st.session_state:
                 # --- RESUMEN ACUMULADO (BARRAS ACTIVIDAD DIESEL) ---
                 tipos_actividad = ['DIESEL/RESIDUAL']
                 df_actividad = df_resumen_tiempos[df_resumen_tiempos['TIPO_CENTRAL'].isin(tipos_actividad)].copy()
+                df_actividad_plot = pd.DataFrame() # Inicializar variable para usarla en la tabla
                 
                 if not df_actividad.empty:
                     # Filtramos para mostrar solo las barras de las unidades que efectivamente operaron > 0 hrs
@@ -1206,8 +1348,46 @@ if 'df_despacho' in st.session_state:
                 else:
                     st.info("No hay centrales Diésel/Residual presentes en la selección actual.")
 
+                # --- NUEVO: Trazabilidad y Descarga de Datos ---
+                with st.expander("Ver Datos de Tiempos Acumulados (Vista Matricial)"):
+                    st.markdown("**Matriz: Horas de Inactividad (Base y Renovables)**")
+                    if not df_inactividad.empty:
+                        # Seleccionamos solo las columnas relevantes y renombramos
+                        df_mat_inact = df_inactividad[['CENTRAL', 'TIPO_CENTRAL', 'INACTIVO_HR']].copy()
+                        df_mat_inact.rename(columns={'INACTIVO_HR': 'HORAS_INACTIVAS'}, inplace=True)
+                        st.dataframe(df_mat_inact, use_container_width=True)
+                    else:
+                        st.info("No hay datos para mostrar en inactividad.")
+
+                    st.markdown("**Matriz: Horas de Operación (Diésel/Residual)**")
+                    if not df_actividad_plot.empty:
+                        # Seleccionamos solo las columnas relevantes y renombramos
+                        df_mat_act = df_actividad_plot[['CENTRAL', 'TIPO_CENTRAL', 'ACTIVO_HR']].copy()
+                        df_mat_act.rename(columns={'ACTIVO_HR': 'HORAS_OPERACION'}, inplace=True)
+                        st.dataframe(df_mat_act, use_container_width=True)
+                    else:
+                        st.info("No hay datos para mostrar en operación Diésel/Residual.")
+
+                    # Generamos el archivo Excel en memoria solo si hay datos en alguna de las dos tablas
+                    if not df_inactividad.empty or not df_actividad_plot.empty:
+                        buffer_tiempos = io.BytesIO()
+                        with pd.ExcelWriter(buffer_tiempos, engine='openpyxl') as writer:
+                            if not df_inactividad.empty:
+                                df_mat_inact.to_excel(writer, sheet_name='Horas_Inactivas', index=False)
+                            if not df_actividad_plot.empty:
+                                df_mat_act.to_excel(writer, sheet_name='Horas_Operacion_Diesel', index=False)
+                        
+                        # Botón de descarga
+                        st.download_button(
+                            label="📥 Descargar Datos de Tiempos Acumulados (Excel)",
+                            data=buffer_tiempos.getvalue(),
+                            file_name=f"Tiempos_Acumulados_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="btn_descarga_tiempos"
+                        )
+
                 # ==========================================
-                # 7. CALIFICACIÓN DE LA OPERACIÓN (ENLAZADA AL FILTRO)
+                # 7. CALIFICACIÓN DE LA OPERACIÓN (ENLAZADA AL FILTRO GLOBAL ESTRICTO)
                 # ==========================================
                 st.markdown("---")
                 st.header("7. 🛡️ Calificación de la Operación")
@@ -1218,18 +1398,19 @@ if 'df_despacho' in st.session_state:
                     st.warning("Las centrales seleccionadas no poseen mapeo de Calificación de Operación en la matriz.")
                 else:
                     df_bar_data = df_seg_raw.dropna(subset=['INICIO', 'FIN']).copy()
+                    
                     if not df_bar_data.empty:
-                        # ENLACE: Utilizar únicamente las centrales sobrevivientes del filtro en cascada
-                        valid_centrales_calif = nombres_calificacion_activos
+                        # =====================================================================
+                        # ENLACE ESTRICTO: Utilizar únicamente las centrales del filtro global
+                        # =====================================================================
+                        # 1. Convertimos la lista heredada del filtro maestro a un conjunto (Set) exacto
+                        centrales_calif_permitidas = set(nombres_calificacion_activos)
                         
-                        def es_central_valida_calif(nombre):
-                            nom_limpio = re.sub(r'\s+', ' ', str(nombre).strip().upper())
-                            for valid_c in valid_centrales_calif:
-                                if valid_c in nom_limpio:
-                                    return True
-                            return False
-                            
-                        df_bar_data = df_bar_data[df_bar_data['CENTRAL'].apply(es_central_valida_calif)].copy()
+                        # 2. Limpiamos los nombres en la base de datos cruda de calificación
+                        df_bar_data['CENTRAL_LIMPIA'] = df_bar_data['CENTRAL'].astype(str).str.strip().str.upper()
+                        
+                        # 3. Aplicamos filtro vectorizado estricto (Elimina cualquier falso positivo)
+                        df_bar_data = df_bar_data[df_bar_data['CENTRAL_LIMPIA'].isin(centrales_calif_permitidas)].copy()
                         
                         if not df_bar_data.empty:
                             df_bar_data['CENTRAL_GRUPO'] = df_bar_data['CENTRAL'].astype(str) + " - " + df_bar_data['GRUPO'].astype(str)
@@ -1273,7 +1454,9 @@ if 'df_despacho' in st.session_state:
                             with st.expander("Ver Registro Detallado de Calificación de Operaciones"):
                                 df_seguridad_filtrado = df_bar_data[df_bar_data['TIPO_OPERACION'] == 'POR SEGURIDAD'].copy()
                                 if not df_seguridad_filtrado.empty:
-                                    st.dataframe(df_seguridad_filtrado, use_container_width=True)
+                                    # Limpiamos las columnas temporales antes de mostrar la tabla para no confundir al usuario
+                                    df_seguridad_mostrar = df_seguridad_filtrado.drop(columns=['CENTRAL_LIMPIA'], errors='ignore')
+                                    st.dataframe(df_seguridad_mostrar, use_container_width=True)
                                 else:
                                     st.info("No hay registros de operación POR SEGURIDAD en este periodo.")
                         else:
@@ -1281,74 +1464,7 @@ if 'df_despacho' in st.session_state:
                     else:
                         st.warning("Faltan datos válidos de INICIO o FIN para graficar las horas de operación.")
 
-                # ==========================================
-                # LÓGICA DE EXPORTACIÓN A WORD (EN EL CONTENEDOR INICIAL)
-                # ==========================================
-                with contenedor_reporte:
-                    if st.button("📄 Preparar Reporte Word (Incluye Gráficos)", use_container_width=True):
-                        with st.spinner("Compilando gráficos... (Nota: Este proceso requiere tener instalada la librería 'kaleido')"):
-                            doc = Document()
-                            doc.add_heading('Dashboard de Supervisión - Despacho SEIN', 0)
-                            doc.add_paragraph(f"Reporte generado automáticamente el: {datetime.now().strftime('%d/%m/%Y a las %H:%M')}")
-
-                            # SOLUCIÓN: Usamos un diccionario mutable para eludir los problemas de alcance (scope)
-                            estado_exportacion = {"error_graficos": False}
-
-                            def agregar_grafico(doc, fig, titulo):
-                                if fig is not None:
-                                    doc.add_heading(titulo, level=1)
-                                    try:
-                                        # Se reduce la escala a 1.2 para evitar bloqueos de memoria (Timeout)
-                                        img_bytes = fig.to_image(format="png", width=800, height=450, scale=1.2)
-                                        imagen_stream = io.BytesIO(img_bytes)
-                                        doc.add_picture(imagen_stream, width=Inches(6.0))
-                                    except Exception as e:
-                                        # Modificamos el valor dentro del diccionario sin usar 'nonlocal'
-                                        estado_exportacion["error_graficos"] = True
-                                        doc.add_paragraph(f"⚠️ [Error al generar la imagen de este gráfico]")
-
-                            def agregar_tabla(doc, df, titulo):
-                                if df is not None and not df.empty:
-                                    doc.add_heading(titulo, level=1)
-                                    table = doc.add_table(rows=1, cols=len(df.columns))
-                                    table.style = 'Table Grid'
-                                    for i, col in enumerate(df.columns):
-                                        table.rows[0].cells[i].text = str(col)
-                                    for _, row in df.iterrows():
-                                        row_cells = table.add_row().cells
-                                        for i, val in enumerate(row):
-                                            row_cells[i].text = str(val)
-
-                            agregar_grafico(doc, fig_tipo, "1. Despacho por Tipo de Generación")
-                            agregar_grafico(doc, fig_inter, "2. Flujo de Interconexión")
-                            agregar_grafico(doc, fig_cen, "3. Generación SEIN por Central")
-                            agregar_grafico(doc, fig_prom, "4. Potencia Promedio Diaria")
-                            agregar_grafico(doc, fig_inactividad, "5.1. Horas No Despachadas (Inactividad)")
-                            agregar_grafico(doc, fig_actividad, "5.2. Horas de Operación (Diésel/Residual)")
-                            agregar_grafico(doc, fig_bar_seg, "6. Calificación de la Operación (Horas por Tipo)")
-
-                            if not df_bar_data.empty:
-                                columnas_limpias = df_bar_data.drop(columns=['HORAS_OPERACION', 'CENTRAL_GRUPO'], errors='ignore')
-                                agregar_tabla(doc, columnas_limpias, "Registro Detallado de Calificación de Operaciones")
-
-                            buffer_docx = io.BytesIO()
-                            doc.save(buffer_docx)
-                            buffer_docx.seek(0)
-                            
-                            # Evaluamos el estado usando nuestro diccionario
-                            if estado_exportacion["error_graficos"]:
-                                st.error("❌ Ocurrió un error al intentar capturar los gráficos. \n\n**Solución obligatoria:** Abre tu terminal de comandos y ejecuta:\n\n`pip install kaleido==0.1.0.post1`\n\n*(Reinicia tu app después de instalarlo).*")
-                            else:
-                                st.success("✅ ¡Reporte compilado con éxito incluyendo los gráficos de supervisión!")
-
-                            st.download_button(
-                                label="⬇️ Haz clic aquí para descargar tu Reporte (.docx)",
-                                data=buffer_docx.getvalue(),
-                                file_name=f"Reporte_Despacho_SEIN_{datetime.now().strftime('%Y%m%d_%H%M')}.docx",
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                type="primary",
-                                use_container_width=True
-                            )
+                
                 # ==========================================
                 # 8. EVOLUCIÓN Y COMPORTAMIENTO DE LA DEMANDA
                 # ==========================================
@@ -1456,13 +1572,16 @@ if 'df_despacho' in st.session_state:
                 # ==========================================
                 st.markdown("---")
                 st.header("10. 📉 Balance de Potencia - Área Norte")
-                st.info("Evolución temporal del comportamiento eléctrico en el Norte del país: Superposición de la Demanda del Área Norte (calculada como la suma de los valores absolutos de Generación y Flujo), la Generación local total del Norte y el inverso multiplicativo del Flujo de Interconexión Centro-Norte (-1 * Flujo C-N).")
+                st.info("Evolución temporal del comportamiento eléctrico en el Norte del país: Superposición de la Demanda del Área Norte (calculada como la suma de los valores absolutos de Generación y Flujo), la Generación local total del Norte y el Flujo de Interconexión Centro-Norte.")
                 
                 df_dem_raw = st.session_state.get('df_demanda', pd.DataFrame())
                 df_inter_raw = st.session_state.get('df_interconexiones', pd.DataFrame())
-                df_despacho_raw = st.session_state.get('df_despacho', pd.DataFrame())
                 
-                if df_dem_raw.empty or df_inter_raw.empty or df_despacho_raw.empty:
+                # --- MODIFICACIÓN CLAVE: Usamos df_datos (el dataframe ya filtrado por el menú COES/NO COES) ---
+                # Si df_datos no está definido en este ámbito, asegúrate de que el bloque esté indentado bajo la definición global
+                df_gen_filtrada = df_datos.copy() if 'df_datos' in locals() or 'df_datos' in globals() else st.session_state.get('df_despacho', pd.DataFrame())
+                
+                if df_dem_raw.empty or df_inter_raw.empty or df_gen_filtrada.empty:
                     st.info("Se requieren datos consolidados de Demanda, Enlaces y Despacho en el periodo para compilar el balance del Área Norte.")
                 else:
                     import plotly.graph_objects as go
@@ -1475,15 +1594,15 @@ if 'df_despacho' in st.session_state:
                     df_cn_total = df_cn.groupby('FECHA_HORA', as_index=False)['FLUJO_MW'].sum()
                     df_cn_total['FLUJO_NEG'] = df_cn_total['FLUJO_MW'] * -1
                     
-                    # 3. Agrupar la Generación total local en la Zona Norte (usando la data maestra limpia)
-                    df_gen_norte = df_despacho_raw[df_despacho_raw['ZONA'] == 'NORTE'].groupby('FECHA_HORA', as_index=False)['DESPACHO_MW'].sum()
+                    # 3. Agrupar la Generación total local en la Zona Norte (Usando la data FILTRADA COES/NO COES)
+                    df_gen_norte = df_gen_filtrada[df_gen_filtrada['ZONA'] == 'NORTE'].groupby('FECHA_HORA', as_index=False)['DESPACHO_MW'].sum()
                     
                     # Consolidar las tres series de tiempo en una única matriz temporal
                     df_balance = df_dem_norte.merge(df_cn_total[['FECHA_HORA', 'FLUJO_NEG']], on='FECHA_HORA', how='inner')
                     df_balance = df_balance.merge(df_gen_norte, on='FECHA_HORA', how='inner')
                     df_balance.columns = ['FECHA_HORA', 'DEMANDA', 'FLUJO_NEG', 'GENERACION']
                     
-                    # --- CÁLCULO CORREGIDO DE LA DEMANDA ---
+                    # --- CÁLCULO DE LA DEMANDA ---
                     # Demanda Norte = |Generación Norte| + |-1 * Flujo C-N|
                     df_balance['DEMANDA'] = df_balance['GENERACION'].abs() + df_balance['FLUJO_NEG'].abs()
                     
@@ -1522,14 +1641,14 @@ if 'df_despacho' in st.session_state:
                             fig.add_trace(go.Scatter(
                                 x=[x_data[idx_max]], y=[y_data[idx_max]],
                                 mode='markers+text', marker=dict(color=color_marcador, size=10, symbol='triangle-up'),
-                                text=[f"<b>Máx: {y_data[idx_max]:,.2f}</b>"], textposition="top center", # <--- 2 DECIMALES
+                                text=[f"<b>Máx: {y_data[idx_max]:,.2f}</b>"], textposition="top center",
                                 showlegend=False, hoverinfo='skip',
                                 textfont=dict(color="blue")
                             ))
                             fig.add_trace(go.Scatter(
                                 x=[x_data[idx_min]], y=[y_data[idx_min]],
                                 mode='markers+text', marker=dict(color=color_marcador, size=10, symbol='triangle-down'),
-                                text=[f"<b>Mín: {y_data[idx_min]:,.2f}</b>"], textposition="bottom center", # <--- 2 DECIMALES
+                                text=[f"<b>Mín: {y_data[idx_min]:,.2f}</b>"], textposition="bottom center",
                                 showlegend=False, hoverinfo='skip',
                                 textfont=dict(color="blue")
                             ))
@@ -1548,7 +1667,7 @@ if 'df_despacho' in st.session_state:
                     fig_balance.update_layout(
                         hovermode="x unified",
                         height=600, 
-                        margin=dict(t=50, b=50, l=50, r=150), # Margen derecho amplio para la leyenda vertical
+                        margin=dict(t=50, b=50, l=50, r=150),
                         legend=dict(
                             title="<b>Variables del Área</b>",
                             orientation="v",
@@ -1574,7 +1693,6 @@ if 'df_despacho' in st.session_state:
                             values=['DEMANDA', 'GENERACION', 'FLUJO_NEG'], 
                             aggfunc='mean'
                         ).round(2)
-                        # Reordenar columnas para legibilidad
                         matriz_b = matriz_b[['DEMANDA', 'GENERACION', 'FLUJO_NEG']]
                         st.dataframe(matriz_b, use_container_width=True)
 
