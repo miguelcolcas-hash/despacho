@@ -586,6 +586,7 @@ if 'df_despacho' in st.session_state:
                         hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>', showlegend=False
                     )
                     
+                    
                     # --- MARCADORES DE MÁXIMO Y MÍNIMO PARA LA CURVA TOTAL ---
                     if not df_sistema.empty:
                         idx_max = df_sistema['DESPACHO_MW'].idxmax()
@@ -598,10 +599,19 @@ if 'df_despacho' in st.session_state:
                         fig.add_scatter(
                             x=[max_row['FECHA_HORA']], y=[max_row['DESPACHO_MW']],
                             mode='markers+text', marker=dict(color='black', size=12, symbol='triangle-up'),
-                            text=[f"<b>Máx: {max_row['DESPACHO_MW']:,.0f} MW<b>"], textposition="top center",
+                            text=[f"<b>Máx: {max_row['DESPACHO_MW']:,.0f} MW</b>"], textposition="top center",
+                            textfont=dict(color="blue"),
                             name='Máx Total', hoverinfo='skip', showlegend=False
                         )
                         
+                        # Marcador Mínimo
+                        fig.add_scatter(
+                            x=[min_row['FECHA_HORA']], y=[min_row['DESPACHO_MW']],
+                            mode='markers+text', marker=dict(color='black', size=12, symbol='triangle-down'),
+                            text=[f"<b>Mín: {min_row['DESPACHO_MW']:,.0f} MW</b>"], textposition="bottom center",
+                            textfont=dict(color="blue"),
+                            name='Mín Total', hoverinfo='skip', showlegend=False
+                        )    
                     
                     fig.update_layout(
                         hovermode="x unified",
@@ -654,7 +664,7 @@ if 'df_despacho' in st.session_state:
                 # ==========================================
                 st.markdown("---")
                 st.header("2. 💸 Despacho Operativo vs Costo Marginal (CMg)")
-                st.info("Despacho por tecnología y flujos (Eje Izquierdo - MW) junto al Costo Marginal de las barras de referencia del SEIN (Eje Derecho - S/./MWh). Curves de líneas resaltadas en negrita.")
+                st.info("Despacho por tecnología y flujos (Eje Izquierdo - MW) junto al Costo Marginal de la barra de referencia de Trujillo (Eje Derecho - S/./MWh). Curves de líneas resaltadas en negrita.")
                 
                 df_cmg_raw = st.session_state.get('df_cmg', pd.DataFrame())
                 
@@ -665,6 +675,9 @@ if 'df_despacho' in st.session_state:
                     from plotly.subplots import make_subplots
                     
                     df_cmg_plot = df_cmg_raw.sort_values(['FECHA_HORA', 'BARRA']).copy()
+                    
+                    # FILTRO: Mantener solo la barra de TRUJILLO 220
+                    df_cmg_plot = df_cmg_plot[df_cmg_plot['BARRA'] == 'TRUJILLO 220']
                     
                     # 1. Recuperar y procesar flujos negativos de la Sección 2
                     df_inter_raw = st.session_state.get('df_interconexiones', pd.DataFrame())
@@ -684,11 +697,9 @@ if 'df_despacho' in st.session_state:
                             df_l5006_total = df_l5006.groupby('FECHA_HORA', as_index=False)['FLUJO_MW'].sum()
                             df_l5006_total['FLUJO_NEG'] = df_l5006_total['FLUJO_MW'] * -1
                     
-                    # Paleta de colores para las barras (Trujillo reemplaza a Piura)
+                    # Paleta de colores para la barra de Trujillo (Azul claro)
                     colores_barra = {
-                        'SANTA ROSA 220': '#d62728',  # Rojo
-                        'MONTALVO 220': '#2ca02c',    # Verde
-                        'TRUJILLO 220': '#ff7f0e'      # Naranja (Resaltado)
+                        'TRUJILLO 220': "#0099FF"  # Azul claro
                     }
                     
                     fig_cmg = make_subplots(specs=[[{"secondary_y": True}]])
@@ -736,12 +747,11 @@ if 'df_despacho' in st.session_state:
                         fig_cmg.add_trace(go.Scatter(
                             x=[max_cn['FECHA_HORA']], y=[max_cn['FLUJO_NEG']],
                             mode='markers+text', marker=dict(color='#9467bd', size=12, symbol='triangle-up'),
-                            text=[f"<b>Máx C-N: {max_cn['FLUJO_NEG']:,.0f} MW<b>"], textposition="top center",
+                            text=[f"<b>Máx C-N: {max_cn['FLUJO_NEG']:,.0f} MW</b>"], textposition="top center",
+                            textfont=dict(color="blue"), # <--- Etiqueta en azul
                             showlegend=False, hoverinfo='skip'
                         ), secondary_y=False)
                         
-                        
-
                     if not df_l5006_total.empty:
                         fig_cmg.add_trace(
                             go.Scatter(
@@ -762,11 +772,10 @@ if 'df_despacho' in st.session_state:
                         fig_cmg.add_trace(go.Scatter(
                             x=[max_l['FECHA_HORA']], y=[max_l['FLUJO_NEG']],
                             mode='markers+text', marker=dict(color='#e377c2', size=12, symbol='triangle-up'),
-                            text=[f"<b>Máx L-5006: {max_l['FLUJO_NEG']:,.0f} MW<b>"], textposition="top center",
+                            text=[f"<b>Máx L-5006: {max_l['FLUJO_NEG']:,.0f} MW</b>"], textposition="top center",
+                            textfont=dict(color="blue"), # <--- Etiqueta en azul
                             showlegend=False, hoverinfo='skip'
                         ), secondary_y=False)
-                        
-                        
 
                     # --- C. LÍNEAS PUNTEADAS DE COSTO MARGINAL EN NEGRITA (EJE Y SECUNDARIO - S/./MWh) ---
                     def graficar_min_max_cmg_dual(fig, df_filtro, color_marcador, nombre_barra):
@@ -778,24 +787,24 @@ if 'df_despacho' in st.session_state:
                                 go.Scatter(
                                     x=[df_filtro.loc[idx_max, 'FECHA_HORA']], y=[df_filtro.loc[idx_max, 'CMG_USD']],
                                     mode='markers+text', marker=dict(color=color_marcador, size=12, symbol='triangle-up'),
-                                    text=[f"<b>Máx: {df_filtro.loc[idx_max, 'CMG_USD']:,.1f} S/./MWh<b>"], textposition="top center",
+                                    text=[f"<b>Máx: {df_filtro.loc[idx_max, 'CMG_USD']:,.1f} S/./MWh</b>"], textposition="top center",
+                                    textfont=dict(color="blue"), # <--- Etiqueta en azul
                                     name=f'Máx {nombre_barra}', hoverinfo='skip', showlegend=False
                                 ),
                                 secondary_y=True
                             )
-                            
 
                     for barra in df_cmg_plot['BARRA'].unique():
                         df_barra = df_cmg_plot[df_cmg_plot['BARRA'] == barra]
                         fig_cmg.add_trace(
                             go.Scatter(
                                 x=df_barra['FECHA_HORA'], y=df_barra['CMG_USD'],
-                                mode='lines', line=dict(width=3, dash='dot', color=colores_barra.get(barra, 'black')), # Negrita (width=3)
-                                name=barra, hovertemplate=f"<b>{barra}</b>: %{{y:,.2f}} USD/MWh"
+                                mode='lines', line=dict(width=3, dash='dot', color=colores_barra.get(barra, '#66b3ff')), # Azul claro y negrita
+                                name=barra, hovertemplate=f"<b>{barra}</b>: %{{y:,.2f}} S/./MWh"
                             ),
                             secondary_y=True
                         )
-                        graficar_min_max_cmg_dual(fig_cmg, df_barra, colores_barra.get(barra, 'black'), barra)
+                        graficar_min_max_cmg_dual(fig_cmg, df_barra, colores_barra.get(barra, '#66b3ff'), barra)
                     
                     # --- D. NUEVO: LÍMITES DE TRANSMISIÓN DE LA LÍNEA L-5006 (EJE Y PRIMARIO) ---
                     fecha_min_cmg = df_cmg_plot['FECHA_HORA'].min()
@@ -805,15 +814,17 @@ if 'df_despacho' in st.session_state:
                     fig_cmg.add_shape(type="line", x0=fecha_min_cmg, y0=700, x1=fecha_max_cmg, y1=700,
                                       line=dict(color="red", width=2, dash="dash"), yref="y")
                     fig_cmg.add_annotation(x=fecha_max_cmg, y=700, text="<b>Límite Sup L-5006: 700 MW</b>",
-                                           showarrow=False, xanchor="right", yanchor="bottom", yref="y")
+                                           showarrow=False, xanchor="right", yanchor="bottom", yref="y",
+                                           font=dict(color="blue")) # <--- Etiqueta en azul
                                            
                     # Límite Inferior: 600 MW (Línea punteada con marcador al final / lado derecho)
                     fig_cmg.add_shape(type="line", x0=fecha_min_cmg, y0=600, x1=fecha_max_cmg, y1=600,
                                       line=dict(color="green", width=2, dash="dash"), yref="y")
                     fig_cmg.add_annotation(x=fecha_max_cmg, y=600, text="<b>Límite Inf L-5006: 600 MW</b>",
-                                           showarrow=False, xanchor="right", yanchor="bottom", yref="y")
+                                           showarrow=False, xanchor="right", yanchor="bottom", yref="y",
+                                           font=dict(color="blue")) # <--- Etiqueta en azul
 
-                    # --- D. AJUSTE DE RANGOS DE EJES Y DISEÑO ---
+                    # --- E. AJUSTE DE RANGOS DE EJES Y DISEÑO ---
                     # Cálculo del límite superior agregando exactamente 400 MW de holgura visual
                     if not df_tipo_cmg.empty:
                         max_gen_total = df_tipo_cmg.groupby('FECHA_HORA')['DESPACHO_MW'].sum().max()
@@ -827,7 +838,7 @@ if 'df_despacho' in st.session_state:
                     limite_y2 = max_val_cmg * 1.15 if max_val_cmg > 0 else 50
                     
                     fig_cmg.update_layout(
-                    hovermode="x unified",
+                        hovermode="x unified",
                         height=650, 
                         margin=dict(t=50, b=50, l=50, r=150), # Se amplía el margen derecho para la leyenda
                         legend=dict(
@@ -865,86 +876,89 @@ if 'df_despacho' in st.session_state:
                 else:
                     df_inter_plot = df_inter_raw.sort_values(['FECHA_HORA', 'LINEA_TRANSMISION']).copy()
                     
-                    # Función auxiliar para marcar picos y valles en los flujos netos
+                    # Función auxiliar optimizada con etiquetas de texto en color azul
                     def marcar_min_max_flujo(fig, df_total, color_marcador):
                         if not df_total.empty:
-                            idx_max = df_total['FLUJO_MW'].idxmax()
-                            idx_min = df_total['FLUJO_MW'].idxmin()
-                            max_row = df_total.loc[idx_max]
-                            min_row = df_total.loc[idx_min]
+                            # 1. Encontrar los índices donde se registran la mayor y menor magnitud absoluta
+                            idx_max_abs = df_total['FLUJO_MW'].abs().idxmax()
+                            idx_min_abs = df_total['FLUJO_MW'].abs().idxmin()
                             
-                            # Marcador Máximo
-                            fig.add_scatter(
-                                x=[max_row['FECHA_HORA']], y=[max_row['FLUJO_MW']],
-                                mode='markers+text', marker=dict(color=color_marcador, size=12, symbol='triangle-up'),
-                                text=[f"<b>Máx: {max_row['FLUJO_MW']:,.0f} MW<b>"], textposition="top center",
-                                name='Máx Flujo', hoverinfo='skip', showlegend=False
+                            # 2. Extraer los valores con su signo original del COES
+                            max_val = df_total.loc[idx_max_abs, 'FLUJO_MW']
+                            min_val = df_total.loc[idx_min_abs, 'FLUJO_MW']
+                            
+                            # Recta Horizontal de Máxima Magnitud Absoluta
+                            fig.add_hline(
+                                y=max_val, 
+                                line_dash="dash", 
+                                line_color=color_marcador, 
+                                line_width=2,
+                                annotation_text=f"<b>Máx: {max_val:,.0f} MW</b>", 
+                                annotation_position="top left",
+                                annotation_font=dict(color="blue") # <--- MODIFICACIÓN: Color azul para la etiqueta
                             )
-                           
                             
-                            # Reajuste del eje Y para evitar que se corten los textos superiores/inferiores
-                            max_val = df_total['FLUJO_MW'].max()
-                            min_val = df_total['FLUJO_MW'].min()
+                            # Recta Horizontal de Mínima Magnitud Absoluta
+                            fig.add_hline(
+                                y=min_val, 
+                                line_dash="dash", 
+                                line_color=color_marcador, 
+                                line_width=2,
+                                annotation_text=f"<b>Mín: {min_val:,.0f} MW</b>", 
+                                annotation_position="bottom left",
+                                annotation_font=dict(color="blue") # <--- MODIFICACIÓN: Color azul para la etiqueta
+                            )
                             
-                            rango_max = max_val * 1.15 if max_val > 0 else max_val * 0.85
-                            rango_min = min_val * 1.15 if min_val < 0 else 0
-                            
-                            # Se asegura un margen visual en ambos sentidos del flujo
-                            if max_val != 0 or min_val != 0:
-                                fig.update_layout(yaxis=dict(range=[rango_min, rango_max]))
+                            # 3. Autoajuste dinámico del eje Y delegado al motor gráfico nativo
+                            fig.update_layout(yaxis=dict(autorange=True))
                     
-                    # CREACIÓN DE 2 COLUMNAS PARA GRAFICAR LADO A LADO
-                    col_cn, col_cs = st.columns(2)
-                    
-                    # GRAFICAR CENTRO-NORTE (LADO IZQUIERDO)
-                    with col_cn:
-                        df_cn = df_inter_plot[df_inter_plot['ENLACE'] == 'CENTRO-NORTE'].copy()
-                        if not df_cn.empty:
-                            fig_inter_cn = px.area(
-                                df_cn, x="FECHA_HORA", y="FLUJO_MW", color="LINEA_TRANSMISION",
-                                title="Flujo Activo - Enlace Centro-Norte (MW)",
-                                labels={"LINEA_TRANSMISION": "Línea", "FLUJO_MW": "Potencia (MW)"},
-                                color_discrete_sequence=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'],
-                                template="plotly_white"
-                            )
-                            df_cn_total = df_cn.groupby('FECHA_HORA', as_index=False)['FLUJO_MW'].sum()
-                            fig_inter_cn.update_traces(hovertemplate="%{y:,.2f} MW", line=dict(width=0))
-                            fig_inter_cn.add_scatter(
-                                x=df_cn_total['FECHA_HORA'], y=df_cn_total['FLUJO_MW'], mode='lines',
-                                line=dict(width=3, color='black', dash='dash'), name='<b>⚡ TOTAL C-N</b>',
-                                hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>'
-                            )
-                            
-                            # Invocación de la función para marcar los límites operativos
-                            marcar_min_max_flujo(fig_inter_cn, df_cn_total, 'black')
-                            
-                            fig_inter_cn.update_layout(hovermode="x unified", xaxis_title="Fecha Operativa", height=450)
-                            st.plotly_chart(fig_inter_cn, use_container_width=True)
+                    # GRAFICAR CENTRO-NORTE (GRÁFICA SUPERIOR)
+                    df_cn = df_inter_plot[df_inter_plot['ENLACE'] == 'CENTRO-NORTE'].copy()
+                    if not df_cn.empty:
+                        fig_inter_cn = px.area(
+                            df_cn, x="FECHA_HORA", y="FLUJO_MW", color="LINEA_TRANSMISION",
+                            title="Flujo de Potencia - Enlace Centro-Norte (MW)",
+                            labels={"LINEA_TRANSMISION": "Línea", "FLUJO_MW": "Potencia (MW)"},
+                            color_discrete_sequence=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'],
+                            template="plotly_white"
+                        )
+                        df_cn_total = df_cn.groupby('FECHA_HORA', as_index=False)['FLUJO_MW'].sum()
+                        fig_inter_cn.update_traces(hovertemplate="%{y:,.2f} MW", line=dict(width=0))
+                        fig_inter_cn.add_scatter(
+                            x=df_cn_total['FECHA_HORA'], y=df_cn_total['FLUJO_MW'], mode='lines',
+                            line=dict(width=3, color='gray', dash='solid'), name='<b>⚡ TOTAL C-N</b>',
+                            hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>'
+                        )
+                        
+                        # Invocación de la función modificada
+                        marcar_min_max_flujo(fig_inter_cn, df_cn_total, 'black')
+                        
+                        fig_inter_cn.update_layout(hovermode="x unified", xaxis_title="Fecha Operativa", height=450)
+                        st.plotly_chart(fig_inter_cn, use_container_width=True)
 
-                    # GRAFICAR CENTRO-SUR (LADO DERECHO)
-                    with col_cs:
-                        df_cs = df_inter_plot[df_inter_plot['ENLACE'] == 'CENTRO-SUR'].copy()
-                        if not df_cs.empty:
-                            fig_inter_cs = px.area(
-                                df_cs, x="FECHA_HORA", y="FLUJO_MW", color="LINEA_TRANSMISION",
-                                title="Flujo Activo - Enlace Centro-Sur (MW)",
-                                labels={"LINEA_TRANSMISION": "Línea", "FLUJO_MW": "Potencia (MW)"},
-                                color_discrete_sequence=['#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'],
-                                template="plotly_white"
-                            )
-                            df_cs_total = df_cs.groupby('FECHA_HORA', as_index=False)['FLUJO_MW'].sum()
-                            fig_inter_cs.update_traces(hovertemplate="%{y:,.2f} MW", line=dict(width=0))
-                            fig_inter_cs.add_scatter(
-                                x=df_cs_total['FECHA_HORA'], y=df_cs_total['FLUJO_MW'], mode='lines',
-                                line=dict(width=3, color='black', dash='dash'), name='<b>⚡ TOTAL C-S</b>',
-                                hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>'
-                            )
-                            
-                            # Invocación de la función para marcar los límites operativos
-                            marcar_min_max_flujo(fig_inter_cs, df_cs_total, 'black')
-                            
-                            fig_inter_cs.update_layout(hovermode="x unified", xaxis_title="Fecha Operativa", height=450)
-                            st.plotly_chart(fig_inter_cs, use_container_width=True)
+                    # GRAFICAR CENTRO-SUR (GRÁFICA INFERIOR)
+                    df_cs = df_inter_plot[df_inter_plot['ENLACE'] == 'CENTRO-SUR'].copy()
+                    if not df_cs.empty:
+                        fig_inter_cs = px.area(
+                            df_cs, x="FECHA_HORA", y="FLUJO_MW", color="LINEA_TRANSMISION",
+                            title="Flujo de Potencia - Enlace Centro-Sur (MW)",
+                            labels={"LINEA_TRANSMISION": "Línea", "FLUJO_MW": "Potencia (MW)"},
+                            color_discrete_sequence=['#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'],
+                            template="plotly_white"
+                        )
+                        df_cs_total = df_cs.groupby('FECHA_HORA', as_index=False)['FLUJO_MW'].sum()
+                        fig_inter_cs.update_traces(hovertemplate="%{y:,.2f} MW", line=dict(width=0))
+                        fig_inter_cs.add_scatter(
+                            x=df_cs_total['FECHA_HORA'], y=df_cs_total['FLUJO_MW'], mode='lines',
+                            line=dict(width=3, color='gray', dash='solid'), name='<b>⚡ TOTAL C-S</b>',
+                            hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>'
+                        )
+                        
+                        # Invocación de la función modificada
+                        marcar_min_max_flujo(fig_inter_cs, df_cs_total, 'black')
+                        
+                        fig_inter_cs.update_layout(hovermode="x unified", xaxis_title="Fecha Operativa", height=450)
+                        st.plotly_chart(fig_inter_cs, use_container_width=True)
                     
                     with st.expander("Ver Datos de Enlaces (Vista Matricial)"):
                         df_inter_pivot = df_inter_plot.copy()
@@ -1362,13 +1376,14 @@ if 'df_despacho' in st.session_state:
                                 textposition="top center",
                                 name=f'Máx {nombre_area}',
                                 hoverinfo='skip',
-                                showlegend=False
+                                showlegend=False,
+                                textfont=dict(color="blue")
                             )
                             
                             
                     # Iterar para marcar puntos críticos por cada área operativa
                     for area in df_subareas['ÁREA'].unique():
-                        graficar_min_max(fig_demanda, df_subareas[df_subareas['ÁREA'] == area], colores_area.get(area, 'black'), area)
+                        graficar_min_max(fig_demanda, df_subareas[df_subareas['ÁREA'] == area], colores_area.get(area, 'blue'), area)
                     
                     if not df_sein.empty:
                         # La línea total del SEIN se mantiene sólida/gruesa o en formato 'dash' para contrastar con los 'dots'
@@ -1378,7 +1393,7 @@ if 'df_despacho' in st.session_state:
                             hovertemplate='<b>🗓️ %{x|%d/%m/%Y %H:%M} ➡️ %{y:,.2f} MW</b>'
                         )
                         # Marcar máximo y mínimo absoluto del SEIN
-                        graficar_min_max(fig_demanda, df_sein, 'black', 'SEIN')
+                        graficar_min_max(fig_demanda, df_sein, 'blue', 'SEIN')
                     
                     fig_demanda.update_layout(
                         hovermode="x unified",
@@ -1420,4 +1435,217 @@ if 'df_despacho' in st.session_state:
                         file_name=f"matriz_sein_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
+                # ==========================================
+                # 10. ANÁLISIS DE BALANCE DE POTENCIA - ÁREA NORTE
+                # ==========================================
+                st.markdown("---")
+                st.header("10. 📉 Balance de Potencia - Área Norte")
+                st.info("Evolución temporal del comportamiento eléctrico en el Norte del país: Superposición de la Demanda del Área Norte, la Generación local total del Norte y el inverso multiplicativo del Flujo de Interconexión Centro-Norte (-1 * Flujo C-N).")
                 
+                df_dem_raw = st.session_state.get('df_demanda', pd.DataFrame())
+                df_inter_raw = st.session_state.get('df_interconexiones', pd.DataFrame())
+                df_despacho_raw = st.session_state.get('df_despacho', pd.DataFrame())
+                
+                if df_dem_raw.empty or df_inter_raw.empty or df_despacho_raw.empty:
+                    st.info("Se requieren datos consolidados de Demanda, Enlaces y Despacho en el periodo para compilar el balance del Área Norte.")
+                else:
+                    import plotly.graph_objects as go
+                    
+                    # 1. Agrupar la Demanda real registrada para el Área Norte
+                    df_dem_norte = df_dem_raw[df_dem_raw['ÁREA'] == 'NORTE'].groupby('FECHA_HORA', as_index=False)['DEMANDA_MW'].sum()
+                    
+                    # 2. Capturar el Flujo Neto Centro-Norte e invertir su signo (* -1)
+                    df_cn = df_inter_raw[df_inter_raw['ENLACE'] == 'CENTRO-NORTE'].copy()
+                    df_cn_total = df_cn.groupby('FECHA_HORA', as_index=False)['FLUJO_MW'].sum()
+                    df_cn_total['FLUJO_NEG'] = df_cn_total['FLUJO_MW'] * -1
+                    
+                    # 3. Agrupar la Generación total local en la Zona Norte (usando la data maestra limpia)
+                    df_gen_norte = df_despacho_raw[df_despacho_raw['ZONA'] == 'NORTE'].groupby('FECHA_HORA', as_index=False)['DESPACHO_MW'].sum()
+                    
+                    # Consolidar las tres series de tiempo en una única matriz temporal
+                    df_balance = df_dem_norte.merge(df_cn_total[['FECHA_HORA', 'FLUJO_NEG']], on='FECHA_HORA', how='inner')
+                    df_balance = df_balance.merge(df_gen_norte, on='FECHA_HORA', how='inner')
+                    df_balance.columns = ['FECHA_HORA', 'DEMANDA', 'FLUJO_NEG', 'GENERACION']
+                    
+                    fig_balance = go.Figure()
+                    
+                    # Curva 1: Demanda Área Norte (Línea Sólida Gruesa)
+                    fig_balance.add_trace(go.Scatter(
+                        x=df_balance['FECHA_HORA'], y=df_balance['DEMANDA'],
+                        mode='lines', line=dict(width=3, color='#FF9900'),
+                        name='<b>📉 DEMANDA NORTE</b>',
+                        hovertemplate="<b>Demanda Norte</b>: %{y:,.2f} MW"
+                    ))
+                    
+                    # Curva 2: Generación Local Norte (Línea Punteada Gruesa)
+                    fig_balance.add_trace(go.Scatter(
+                        x=df_balance['FECHA_HORA'], y=df_balance['GENERACION'],
+                        mode='lines', line=dict(width=3, dash='dot', color='#1f77b4'),
+                        name='<b>🏭 GENERACIÓN NORTE</b>',
+                        hovertemplate="<b>Generación Norte</b>: %{y:,.2f} MW"
+                    ))
+                    
+                    # Curva 3: Flujo Inverso Centro-Norte (Línea Discontinua Gruesa)
+                    fig_balance.add_trace(go.Scatter(
+                        x=df_balance['FECHA_HORA'], y=df_balance['FLUJO_NEG'],
+                        mode='lines', line=dict(width=3, dash='dash', color='#9467bd'),
+                        name='<b>🔌 -1 * FLUJO C-N</b>',
+                        hovertemplate="<b>-1 * Flujo C-N</b>: %{y:,.2f} MW"
+                    ))
+                    
+                    # Subrutina para inyectar marcadores de extremos (Máximos/Mínimos) en negrita
+                    def marcar_extremos_balance(fig, x_data, y_data, color_marcador):
+                        if not y_data.empty:
+                            idx_max = y_data.idxmax()
+                            idx_min = y_data.idxmin()
+                            
+                            fig.add_trace(go.Scatter(
+                                x=[x_data[idx_max]], y=[y_data[idx_max]],
+                                mode='markers+text', marker=dict(color=color_marcador, size=10, symbol='triangle-up'),
+                                text=[f"<b>Máx: {y_data[idx_max]:,.0f}</b>"], textposition="top center",
+                                showlegend=False, hoverinfo='skip',
+                                textfont=dict(color="blue")
+                            ))
+                            fig.add_trace(go.Scatter(
+                                x=[x_data[idx_min]], y=[y_data[idx_min]],
+                                mode='markers+text', marker=dict(color=color_marcador, size=10, symbol='triangle-down'),
+                                text=[f"<b>Mín: {y_data[idx_min]:,.0f}</b>"], textposition="bottom center",
+                                showlegend=False, hoverinfo='skip',
+                                textfont=dict(color="blue"),
+                            ))
+                    
+                    # Marcar picos y valles para cada una de las series
+                    marcar_extremos_balance(fig_balance, df_balance['FECHA_HORA'], df_balance['DEMANDA'], '#FF9900')
+                    marcar_extremos_balance(fig_balance, df_balance['FECHA_HORA'], df_balance['GENERACION'], '#1f77b4')
+                    marcar_extremos_balance(fig_balance, df_balance['FECHA_HORA'], df_balance['FLUJO_NEG'], '#9467bd')
+                    
+                    # Definición dinámica de límites de visualización con +400 MW de holgura
+                    max_absoluto = max(df_balance['DEMANDA'].max(), df_balance['GENERACION'].max(), df_balance['FLUJO_NEG'].max())
+                    min_absoluto = min(df_balance['DEMANDA'].min(), df_balance['GENERACION'].min(), df_balance['FLUJO_NEG'].min())
+                    limite_y_sup = max_absoluto + 400
+                    limite_y_inf = min_absoluto * 1.15 if min_absoluto < 0 else 0
+                    
+                    fig_balance.update_layout(
+                        hovermode="x unified",
+                        height=600, 
+                        margin=dict(t=50, b=50, l=50, r=150), # Margen derecho amplio para la leyenda vertical
+                        legend=dict(
+                            title="<b>Variables del Área</b>",
+                            orientation="v",
+                            yanchor="top", 
+                            y=1, 
+                            xanchor="left", 
+                            x=1.05
+                        ),
+                        template="plotly_white",
+                        xaxis=dict(title_text="Fecha Operativa", tickformat="%d/%m\n%H:%M"),
+                        yaxis=dict(title_text="Potencia Activa (MW)", range=[limite_y_inf, limite_y_sup])
+                    )
+                    
+                    st.plotly_chart(fig_balance, use_container_width=True)
+                    
+                    # Tabla matricial complementaria para trazabilidad de datos
+                    with st.expander("Ver Datos de Balance Norte (Vista Matricial)"):
+                        df_mat_b = df_balance.copy()
+                        df_mat_b['FECHA'] = df_mat_b['FECHA_HORA'].dt.strftime('%d/%m/%Y')
+                        df_mat_b['HORA'] = df_mat_b['FECHA_HORA'].dt.strftime('%H:%M')
+                        matriz_b = df_mat_b.pivot_table(
+                            index=['FECHA', 'HORA'], 
+                            values=['DEMANDA', 'GENERACION', 'FLUJO_NEG'], 
+                            aggfunc='mean'
+                        ).round(2)
+                        # Reordenar columnas para legibilidad
+                        matriz_b = matriz_b[['DEMANDA', 'GENERACION', 'FLUJO_NEG']]
+                        st.dataframe(matriz_b, use_container_width=True)
+                # ==========================================
+                # 11. EVOLUCIÓN GLOBAL DE COSTOS MARGINALES (CMg)
+                # ==========================================
+                st.markdown("---")
+                st.header("11. 📈 Evolución Consolidada de Costos Marginales")
+                st.info("Comparativa directa del Costo Marginal (USD/MWh) en las principales barras de referencia del Norte, Centro y Sur del SEIN.")
+                
+                df_cmg_raw = st.session_state.get('df_cmg', pd.DataFrame())
+                
+                if df_cmg_raw.empty:
+                    st.info("No se encontraron datos de Costos Marginales en el periodo descargado.")
+                else:
+                    df_cmg_plot_11 = df_cmg_raw.sort_values(['FECHA_HORA', 'BARRA']).copy()
+                    
+                    # Paleta de colores estándar para las 3 barras
+                    colores_barra_11 = {
+                        'SANTA ROSA 220': '#d62728',  # Rojo (Centro)
+                        'MONTALVO 220': '#2ca02c',    # Verde (Sur)
+                        'TRUJILLO 220': '#ff7f0e'     # Naranja (Norte)
+                    }
+                    
+                    # Generación de la gráfica de líneas múltiples
+                    fig_cmg_11 = px.line(
+                        df_cmg_plot_11, x="FECHA_HORA", y="CMG_USD", color="BARRA",
+                        title="Costo Marginal Consolidado por Barra (USD/MWh)",
+                        labels={"BARRA": "Barra 220 kV", "CMG_USD": "Costo Marginal (USD/MWh)"},
+                        color_discrete_map=colores_barra_11, 
+                        template="plotly_white"
+                    )
+                    
+                    # Aplicar formato de línea gruesa y punteada
+                    fig_cmg_11.update_traces(hovertemplate="<b>%{data.name}</b>: %{y:,.2f} USD/MWh", line=dict(width=3, dash='dot'))
+                    
+                    # Subrutina para añadir marcadores de extremos con texto AZUL
+                    def graficar_extremos_azules(fig, df_filtro, color_marcador, nombre_barra):
+                        if not df_filtro.empty:
+                            idx_max = df_filtro['CMG_USD'].idxmax()
+                            idx_min = df_filtro['CMG_USD'].idxmin()
+                            
+                            # Marcador Máximo (Texto Azul)
+                            fig.add_scatter(
+                                x=[df_filtro.loc[idx_max, 'FECHA_HORA']], y=[df_filtro.loc[idx_max, 'CMG_USD']],
+                                mode='markers+text', marker=dict(color=color_marcador, size=12, symbol='triangle-up'),
+                                text=[f"<b>Máx: {df_filtro.loc[idx_max, 'CMG_USD']:,.1f}</b>"], 
+                                textposition="top center",
+                                textfont=dict(color="blue"), # <--- ETIQUETA EN AZUL
+                                name=f'Máx {nombre_barra}', hoverinfo='skip', showlegend=False
+                            )
+                            
+                            # Marcador Mínimo (Texto Azul)
+                            fig.add_scatter(
+                                x=[df_filtro.loc[idx_min, 'FECHA_HORA']], y=[df_filtro.loc[idx_min, 'CMG_USD']],
+                                mode='markers+text', marker=dict(color=color_marcador, size=12, symbol='triangle-down'),
+                                text=[f"<b>Mín: {df_filtro.loc[idx_min, 'CMG_USD']:,.1f}</b>"], 
+                                textposition="bottom center",
+                                textfont=dict(color="blue"), # <--- ETIQUETA EN AZUL
+                                name=f'Mín {nombre_barra}', hoverinfo='skip', showlegend=False
+                            )
+
+                    # Iterar sobre todas las barras disponibles en la data original
+                    for barra in df_cmg_plot_11['BARRA'].unique():
+                        df_barra_11 = df_cmg_plot_11[df_cmg_plot_11['BARRA'] == barra]
+                        graficar_extremos_azules(fig_cmg_11, df_barra_11, colores_barra_11.get(barra, 'black'), barra)
+                    
+                    # Ajuste de escala dinámica con margen visual del 15%
+                    max_val_cmg_11 = df_cmg_plot_11['CMG_USD'].max()
+                    limite_superior_11 = max_val_cmg_11 * 1.15 if max_val_cmg_11 > 0 else 50
+                    
+                    fig_cmg_11.update_layout(
+                        hovermode="x unified",
+                        xaxis=dict(tickformat="%d/%m\n%H:%M", title="Fecha Operativa"),
+                        yaxis=dict(title="Costo Marginal (USD/MWh)", range=[0, limite_superior_11]),
+                        height=600, 
+                        margin=dict(t=50, b=50, l=50, r=150),
+                        legend=dict(
+                            title="<b>Barras SEIN</b>",
+                            orientation="v", 
+                            yanchor="top", 
+                            y=1, 
+                            xanchor="left", 
+                            x=1.02
+                        )
+                    )
+                    
+                    st.plotly_chart(fig_cmg_11, use_container_width=True)
+                    
+                    with st.expander("Ver Datos Consolidados de CMg (Vista Matricial)"):
+                        df_cmg_pivot_11 = df_cmg_plot_11.copy()
+                        df_cmg_pivot_11['FECHA'] = df_cmg_pivot_11['FECHA_HORA'].dt.strftime('%d/%m/%Y')
+                        df_cmg_pivot_11['HORA'] = df_cmg_pivot_11['FECHA_HORA'].dt.strftime('%H:%M')
+                        matriz_cmg_11 = df_cmg_pivot_11.pivot_table(index=['FECHA', 'HORA'], columns=['BARRA'], values='CMG_USD', aggfunc='mean').round(2)
+                        st.dataframe(matriz_cmg_11, use_container_width=True)
