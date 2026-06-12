@@ -435,6 +435,12 @@ rango_fechas = st.sidebar.date_input("Intervalo de Fechas", value=(hoy, hoy))
 if st.sidebar.button("📊 Extraer Despacho - SEIN Completo", type="primary"):
     if isinstance(rango_fechas, tuple) and len(rango_fechas) == 2:
         start_date, end_date = rango_fechas
+        
+        # =========================================================================
+        # AUTOMATIZACIÓN: SE MODIFICA PARA LIMPIAR LA CACHÉ INTERNAMENTE AL INICIAR
+        # =========================================================================
+        st.cache_data.clear() # <--- Fuerza la descarga limpia de archivos retrasados del COES
+        
         status_text = st.empty()
         progress_bar = st.progress(0)
         
