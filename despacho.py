@@ -173,10 +173,10 @@ def extraer_datos_despacho(fecha, dict_recursos):
                         if pd.notna(p):
                             nombre_base_crudo = str(p).strip().upper()
                             
-                            # --- HOMOLOGACIÓN DE NOMENCLATURA DEL COES ---
-                            if nombre_base_crudo == 'CARPAPATA':
-                                nombre_base_crudo = 'CARPAPATA I'
-                            # ---------------------------------------------
+                            # --- HOMOLOGACIÓN DE NOMENCLATURA DEL COES ---                     
+                            if nombre_base_crudo == 'CARPAPATA I' or nombre_base_crudo == 'CARPAPATA':
+                                nombre_base_crudo = 'CARPAPATA'
+                             # ---------------------------------------------
                             
                             if nombre_base_crudo != '' and 'MW' not in nombre_base_crudo:
                                 tipo_excel = str(tipos_raw[i]).strip().upper() if pd.notna(tipos_raw[i]) else "N/A"
