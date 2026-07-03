@@ -49,6 +49,38 @@ st.set_page_config(page_title="Supervisión Despacho - SEIN", layout="wide", ini
 st.title("⚡ Dashboard de Supervisión - Despacho Ejecutado del SEIN ")
 st.markdown("Supervisión del Despacho, Interconexiones y Seguridad Operativa")
 
+# --- LÓGICA DE INICIO DE SESIÓN ---
+def check_credentials():
+    """Devuelve True si las credenciales son correctas."""
+    # Credenciales hardcodeadas
+    CORRECT_USERNAME = "vasmol"
+    CORRECT_PASSWORD = "supervisorvasmol"
+
+    # Usar session_state para mantener el estado de autenticación
+    if 'authenticated' not in st.session_state:
+        st.session_state['authenticated'] = False
+
+    if not st.session_state['authenticated']:
+        # Crear un formulario para el login
+        with st.form("login_form"):
+            st.header("Inicio de Sesión")
+            username = st.text_input("Usuario")
+            password = st.text_input("Contraseña", type="password")
+            submitted = st.form_submit_button("Ingresar")
+
+            if submitted:
+                if username == CORRECT_USERNAME and password == CORRECT_PASSWORD:
+                    st.session_state['authenticated'] = True
+                    st.rerun()  # Volver a ejecutar el script para mostrar el dashboard
+                else:
+                    st.error("Usuario o contraseña incorrectos.")
+        return False
+    else:
+        return True
+
+if not check_credentials():
+    st.stop() # No continuar con el resto del script si no está autenticado
+
 MESES = {
     1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
     5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
