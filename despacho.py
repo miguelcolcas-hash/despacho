@@ -13,30 +13,20 @@ from docx.shared import Inches
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Código CSS para ocultar elementos de la interfaz
-hide_github_style = """
-    <style>
-    /* Ocultar el botón de GitHub/Fork en la esquina superior derecha */
-    #GithubIcon {visibility: hidden;}
-    
-    /* Ocultar el menú de hamburguesa estándar de Streamlit */
-    #MainMenu {visibility: hidden;}
-    
-    /* Ocultar la barra de encabezado superior por completo */
-    header {visibility: hidden;}
-    
-    /* Ocultar el pie de página "Made with Streamlit" */
-    footer {visibility: hidden;}
-    </style>
-"""
-
 # Inyectar CSS en la aplicación
 st.markdown(
     """
     <style>
+    /* Ocultar elementos de la interfaz de Streamlit */
+    #GithubIcon,
+    #MainMenu,
+    header,
+    footer {
+        visibility: hidden;
+    }
+    /* Ocultar el badge de "viewer" de Streamlit Community Cloud */
     .css-1jc7ptx, .e1ewe7hr3, .viewerBadge_container__1QSob,
-    .styles_viewerBadge__1yB5_, .viewerBadge_link__1S137,
-    .viewerBadge_text__1JaDK {
+    .styles_viewerBadge__1yB5_, .viewerBadge_link__1S137, .viewerBadge_text__1JaDK {
         display: none;
     }
     </style>
